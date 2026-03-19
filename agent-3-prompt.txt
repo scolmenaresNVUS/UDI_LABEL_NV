@@ -1,0 +1,455 @@
+# AGENT 3: Printer Module, Batch Printing, Audit & Deployment (Phases 6–8)
+
+You are completing a GS1 DataMatrix UDI Label Management System for medical devices. Phases 1–5 are done. You are responsible for Phases 6–8: printer connectivity, batch/sequential printing, audit trail UI, and deployment.
+
+Read this entire prompt before writing any code. Familiarize yourself with the existing codebase first.
+
+---
+
+## CRITICAL LABEL FORMAT RULE
+
+**LOT MODE:** (01) GTIN + (10) Lot + (11) Manufacturing. NO expiration. Batch printing = N copies of the same label.
+**SERIAL MODE:** (01) GTIN + (17) Expiration + (11) Manufacturing + (21) Serial. WITH expiration. Batch printing = sequential serial numbers.
+
+**HRI DISPLAY ORDER (text printed on label):**
+- LOT: `(01) GTIN` → `(10) LOT` → `(11) MfgDate`
+- SERIAL: `(01) GTIN` → `(21) SERIAL` → `(11) MfgDate` → `(17) ExpDate`
+- The identifier (lot or serial) is always the SECOND line, right after GTIN.
+- This is different from the DataMatrix encoding order (which puts fixed-length AIs first).
+
+---
+
+## EXISTING CODEBASE CONTEXT
+
+Already built:
+- React + TypeScript + Vite + Tailwind frontend
+- Express + TypeScript backend with **JSON file storage** (`JsonStore<T>` in `server/src/services/jsonStore.ts`)
+- All stores: userStore, productStore, templateStore, printerStore, printJobStore, auditLogStore
+- Auth, label data form, product profiles, GS1 encoding (lot/serial aware)
+- Label template designer with react-konva
+- ZPL generation: `generateZpl()`, `generateBatchZpl()`, `generateLotBatchZpl()`, `buildZplGs1String()`
+- ZPL preview via Labelary API
+- Audit log service (append-only)
+
+Key: All data operations use `JsonStore` methods (readAll, append, findById, updateById, deleteById). NO database.
+
+---
+
+## FILES YOU WILL CREATE
+
+```
+client/src/components/PrinterManager/
+├── PrinterManager.tsx
+├── PrinterList.tsx
+├── PrinterForm.tsx
+├── PrinterStatus.tsx
+└── ZebraBrowserPrintSetup.tsx
+
+client/src/components/BatchPrint/
+├── BatchPrintPage.tsx
+├── SerialPatternBuilder.tsx
+├── SerialPreview.tsx
+├── PrintProgress.tsx
+├── PrintConfirmation.tsx
+└── LotPrintForm.tsx
+
+client/src/components/PrintQueue/
+├── PrintQueue.tsx                 # Queued jobs panel with "Print Now" button
+
+client/src/components/PrintHistory/
+├── PrintHistory.tsx
+└── PrintJobDetail.tsx
+
+client/src/components/AuditLog/
+├── AuditLogViewer.tsx
+
+client/src/services/
+├── zebraBrowserPrint.ts
+├── printerService.ts
+
+server/src/routes/
+├── printers.routes.ts
+├── printJobs.routes.ts
+
+server/src/controllers/
+├── printers.controller.ts
+├── printJobs.controller.ts
+
+server/src/services/
+├── printer.service.ts
+├── printQueue.service.ts          # LAN print queue logic
+
+server/src/drivers/
+├── PrinterDriver.interface.ts
+├── NetworkTcpDriver.ts
+└── README.md
+```
+
+---
+
+## PHASE 6: PRINTER CONNECTION MODULE
+
+### Step 6.1 — Zebra Browser Print Client Integration
+
+`client/src/services/zebraBrowserPrint.ts`:
+
+```typescript
+/**
+ * Wrapper for Zebra Browser Print local API.
+ * Zebra Browser Print is a free application that runs on the user's PC and
+ * bridges web apps to USB-connected Zebra printers.
+ *
+ * IMPORTANT: Check Zebra's current docs for exact API endpoints:
+ * https://www.zebra.com/us/en/support-downloads/printer-software/browser-print.html
+ * The endpoints below are based on their JS SDK pattern. Adjust if needed.
+ */
+
+export interface ZebraPrinter { name: string; uid: string; connection: string; deviceType: string; }
+
+export async function checkZebraBrowserPrint(): Promise<{ available: boolean; version?: string }> {
+  // Try localhost, 2-second timeout, return available status
+}
+
+export async function discoverPrinters(): Promise<ZebraPrinter[]> {
+  // List connected USB Zebra printers
+}
+
+export async function sendToZebraPrinter(printer: ZebraPrinter, zpl: string): Promise<void> {
+  // Send ZPL to specific printer
+}
+
+export async function readPrinterStatus(printer: ZebraPrinter): Promise<string> {
+  // Query printer status
+}
+```
+
+### Step 6.2 — Network TCP Driver (Server-side)
+
+`server/src/drivers/PrinterDriver.interface.ts`:
+```typescript
+export interface PrinterDriverInterface {
+  sendJob(zpl: string): Promise<void>;
+  getStatus(): Promise<{ online: boolean; paperOut: boolean; headOpen: boolean; }>;
+  sendTestLabel(printerName: string): Promise<void>;
+}
+```
+
+`server/src/drivers/NetworkTcpDriver.ts`:
+- Uses Node `net.Socket` to send ZPL via raw TCP
+- Default port 9100, configurable
+- Timeout handling, error reporting
+
+### Step 6.3 — Printer API
+
+`server/src/routes/printers.routes.ts`:
+
+All operations use `printerStore` (JsonStore reading from `data/printers.json`):
+- `GET /api/printers` — `printerStore.readAll()`
+- `POST /api/printers` — `printerStore.append(newPrinter)`, admin only
+- `PUT /api/printers/:id` — `printerStore.updateById()`, admin only
+- `DELETE /api/printers/:id` — check printJobStore for references first, then `printerStore.deleteById()`, admin only
+- `POST /api/printers/:id/test` — send test label
+- `POST /api/printers/:id/set-default` — update all printers' isDefault field
+
+### Step 6.4 — Printer Manager UI
+
+`PrinterManager.tsx`: Admin-only page.
+- Zebra Browser Print detection banner (green if active, yellow with setup guide if not)
+- Printer list table, add/edit/delete, test print, set default
+- `ZebraBrowserPrintSetup.tsx`: installation guide with download link and retry button
+
+### Step 6.5 — Test Phase 6
+
+1. Detect Zebra Browser Print, discover GK420D
+2. Add USB printer → saved to data/printers.json
+3. Test print → small test label prints on physical printer
+4. Set as default → star icon updates
+
+---
+
+## PHASE 7: BATCH / SEQUENTIAL PRINTING
+
+### Step 7.1 — Print Job API
+
+`server/src/routes/printJobs.routes.ts`:
+
+Uses `printJobStore` (JsonStore reading from `data/print-jobs.json`):
+
+- `POST /api/print-jobs` — Create and process print job:
+  1. Validate inputs (Zod)
+  2. Load template from `templateStore.findById()`
+  3. **LOT MODE:** generate ZPL with `generateLotBatchZpl()`, total = copiesPerLabel. No serials.
+  4. **SERIAL MODE with batch:** generate serials, then `generateBatchZpl()`. Includes expiration date.
+  5. **SERIAL MODE single:** generate single ZPL with `generateZpl()`. Includes expiration date.
+  6. `printJobStore.append(newJob)` with status='pending'
+  7. For network printers: send via NetworkTcpDriver, update status
+  8. For Zebra Browser Print: return ZPL in response for client-side delivery
+  9. Log to audit
+
+- `PATCH /api/print-jobs/:id/status` — update status, labelsPrinted (client calls this after sending to Zebra Browser Print)
+
+- `GET /api/print-jobs` — paginated list from printJobStore. Support query filters: status, userId, dateFrom, dateTo.
+
+- `GET /api/print-jobs/:id` — full details
+
+### Step 7.2 — Batch Print UI
+
+`BatchPrintPage.tsx`: Guided step-by-step workflow:
+
+**Step 1: Template & Data**
+- Template dropdown, label data form (GTIN, lot/serial toggle, dates)
+- **LOT MODE:** expiration date hidden, auto-expiration hidden
+- **SERIAL MODE:** expiration date visible, auto-expiration available
+
+**Step 2: Quantity / Batch Config**
+- **LOT MODE** → `LotPrintForm.tsx`:
+  - "Number of copies" input (how many identical labels)
+  - Simple — no serial pattern
+- **SERIAL MODE** → toggle: "Single Label" or "Batch Print"
+  - Single: just serial number input
+  - Batch: `SerialPatternBuilder.tsx`
+
+`SerialPatternBuilder.tsx`:
+- Prefix, suffix, start, end, step, zero-pad width
+- Real-time validation, total count display
+- Warning if count > 1000
+
+`SerialPreview.tsx`:
+- First 20 serials + last 5, "...and N more" in between
+
+**Step 3: Print Settings**
+- Printer selector, copies per label
+- Total: LOT = copies. SERIAL BATCH = unique serials × copies per label.
+
+**Step 4: Confirmation**
+
+`PrintConfirmation.tsx`:
+- Full summary. LOT mode shows lot number, no expiration. SERIAL mode shows serial range and expiration date.
+- "I confirm the label data is correct" checkbox → enables Print button
+
+**Step 5: Printing**
+
+`PrintProgress.tsx`:
+- Progress bar, current label count, elapsed time, estimated remaining
+- Pause/Resume/Cancel buttons
+- Client sends ZPL chunks (10-50 labels per chunk) to Zebra Browser Print
+- 500ms delay between chunks to avoid buffer overflow
+- Updates server via PATCH after each chunk
+- On complete: success message. On error: error + option to retry from failure point.
+
+### Step 7.3 — Print History
+
+`PrintHistory.tsx`:
+- Table: date, user, template, GTIN, mode (Lot/Serial), lot# or serial range, total, status
+- Filters: date range, status, user (admin)
+- Click row for detail view
+
+`PrintJobDetail.tsx`:
+- All fields. For serial batch: list serials. For lot: show lot # and copies.
+- "Reprint" button: pre-fills BatchPrintPage with this job's config
+- "Download ZPL" button
+
+### Step 7.4 — Test Phase 7
+
+1. **LOT single:** enter lot data (no expiration) → print 1 label → correct (3 HRI lines, no expiration)
+2. **LOT batch:** 50 copies → all 50 identical labels print
+3. **SERIAL single:** enter serial + expiration → print 1 label → correct (4 HRI lines, with expiration)
+4. **SERIAL batch:** ABC234-ABC238 → 5 labels with unique serials, all with same expiration
+5. **Scan labels:** LOT label scans with no expiration data. SERIAL label scans with expiration data.
+6. **Pause/Cancel:** start 50-label batch, pause at ~20, verify stop, resume, completes
+7. **Print history:** all jobs appear with correct details
+8. **Reprint:** click reprint on completed job → pre-fills correctly
+
+---
+
+## PHASE 8: AUDIT, POLISH & DEPLOYMENT
+
+### Step 8.1 — Audit Log Viewer
+
+`AuditLogViewer.tsx`: Admin-only, read-only.
+- Table: timestamp, user, action, entity, details
+- Filters: date range, user, action type
+- Expand row for full details JSON
+- Export to CSV
+- Data from `auditLogStore.readAll()` — no edit/delete UI
+
+### Step 8.2 — Navigation Updates
+
+Full routing:
+```
+/login                → LoginPage
+/                     → redirect to /labels
+/labels               → BatchPrintPage (unified label + printing)
+/templates            → TemplateList
+/templates/designer   → LabelDesigner
+/products             → ProductList
+/print-history        → PrintHistory
+/print-history/:id    → PrintJobDetail
+/admin/users          → UserManagement
+/admin/printers       → PrinterManager
+/admin/audit          → AuditLogViewer
+```
+
+### Step 8.3 — UX Polish
+
+- Loading spinners for API calls
+- Toast notifications for errors/success
+- Empty states ("No templates yet — create your first template")
+- Form unsaved changes warning on navigate
+- Session timeout warning 5 minutes before JWT expiry
+
+### Step 8.4 — LAN Deployment
+
+All users are on the same office WiFi/network. The app runs on the PC that has the Zebra GK420D connected via USB. Other users access it through that PC's local IP address. No cloud, no tunnels, no remote print queues.
+
+**Server binding — `server/src/app.ts`:**
+
+Bind to `0.0.0.0` (all network interfaces) so LAN devices can reach it:
+```typescript
+import os from 'os';
+
+function getLocalIpAddress(): string {
+  const interfaces = os.networkInterfaces();
+  for (const iface of Object.values(interfaces)) {
+    if (!iface) continue;
+    for (const alias of iface) {
+      if (alias.family === 'IPv4' && !alias.internal) return alias.address;
+    }
+  }
+  return 'localhost';
+}
+
+const PORT = process.env.PORT || 3001;
+const localIp = getLocalIpAddress();
+
+app.listen(Number(PORT), '0.0.0.0', () => {
+  console.log('');
+  console.log('===========================================');
+  console.log('  GS1 DataMatrix Label System — Running');
+  console.log('===========================================');
+  console.log(`  Local:   http://localhost:${PORT}`);
+  console.log(`  Network: http://${localIp}:${PORT}`);
+  console.log('');
+  console.log('  Share the Network URL with other users');
+  console.log('  on your office WiFi to give them access.');
+  console.log('===========================================');
+  console.log('');
+});
+```
+
+**Printing architecture for LAN:**
+
+Since all users are on the same network and Zebra Browser Print runs on the server PC:
+- The server PC user prints directly — ZPL goes browser → Zebra Browser Print → USB printer.
+- **Other LAN users** also need Zebra Browser Print installed on the server PC, but their browser communicates with it via `localhost`. HOWEVER — Zebra Browser Print only listens on `localhost` of the machine it's installed on. This means:
+  - **LAN users CANNOT send ZPL directly to the server PC's Zebra Browser Print from their own browser.** The `fetch('http://localhost:9100/...')` call in their browser hits THEIR own localhost, not the server PC.
+  - **Solution: Use the backend as a print proxy.** When a LAN user prints:
+    1. Their browser sends the ZPL to the backend: `POST /api/print-jobs/:id/execute`
+    2. The backend saves the ZPL and marks the job as `queued`
+    3. On the server PC (where the printer is), a lightweight print polling loop checks for queued jobs every 5 seconds
+    4. When a queued job is found, the server PC's browser (or a background script) sends the ZPL to Zebra Browser Print on localhost
+    5. Job status updates to `completed`
+
+Implement this print proxy in `server/src/services/printQueue.service.ts`:
+```typescript
+/**
+ * Print queue for LAN users.
+ *
+ * Architecture:
+ * 1. Any user (local or LAN) creates a print job via POST /api/print-jobs
+ * 2. The ZPL is stored in the print job record (in data/print-jobs.json)
+ * 3. On the Label Creator page, add a "Print Queue" panel visible on ALL clients
+ * 4. The server PC user (who has the USB printer) sees queued jobs and clicks
+ *    "Print Now" which sends the ZPL to Zebra Browser Print from THEIR browser
+ * 5. Status updates from 'queued' → 'printing' → 'completed'
+ *
+ * This avoids the localhost restriction of Zebra Browser Print — only the
+ * browser on the server PC talks to Zebra Browser Print.
+ */
+```
+
+**Print Queue UI component** (`client/src/components/PrintQueue/PrintQueue.tsx`):
+- Shown on the main page (label creator / dashboard)
+- Polls `GET /api/print-jobs?status=queued` every 5 seconds
+- Displays queued jobs: job ID, user who queued it, template, GTIN, label count, timestamp
+- "Print Now" button per job — only functional if Zebra Browser Print is detected on THIS browser's machine (i.e., the server PC)
+- "Print All Queued" button to process all queued jobs sequentially
+- On non-printer PCs, the "Print Now" button is disabled with tooltip: "Connect to the printer PC to print, or ask the printer operator to process the queue"
+- After clicking "Print Now": sends ZPL to Zebra Browser Print, updates job status via PATCH
+
+**Windows Firewall note in README:**
+The server PC may need a Windows Firewall rule to allow incoming connections on port 3001. Add instructions:
+```
+1. Open Windows Defender Firewall → Advanced Settings
+2. Inbound Rules → New Rule
+3. Rule Type: Port
+4. TCP, Specific port: 3001
+5. Allow the connection
+6. Apply to: Domain, Private (NOT Public)
+7. Name: "GS1 Label System"
+```
+
+### Step 8.5 — Build Script
+
+Add production build to root `package.json`:
+```json
+{
+  "scripts": {
+    "dev": "concurrently \"cd server && npm run dev\" \"cd client && npm run dev\"",
+    "build": "cd client && npm run build && cd ../server && npm run build",
+    "start": "cd server && node dist/app.js",
+    "setup": "npm install && cd client && npm install && cd ../server && npm install"
+  }
+}
+```
+
+In production, Express serves the client build as static files:
+```typescript
+if (process.env.NODE_ENV === 'production') {
+  app.use(express.static(path.join(__dirname, '../../client/dist')));
+  app.get('*', (req, res) => {
+    if (!req.path.startsWith('/api')) {
+      res.sendFile(path.join(__dirname, '../../client/dist/index.html'));
+    }
+  });
+}
+```
+
+### Step 8.6 — README
+
+Comprehensive README covering:
+1. Overview and regulatory compliance (FDA UDI, EU MDR)
+2. Prerequisites: Node.js 20+, Zebra Browser Print (on the printer PC only)
+3. Quick start: `npm run setup && npm run build && npm run start`
+4. Default login: admin / ChangeMe123!
+5. LAN access: share the Network URL shown in the console with office users
+6. Windows Firewall setup (allow port 3001 on private/domain networks)
+7. Zebra Browser Print installation (on the printer PC only)
+8. How LAN printing works: LAN users queue jobs → printer PC operator clicks "Print Now"
+9. Adding a printer, creating templates, printing labels
+10. Label modes: LOT (no expiration) vs SERIAL (with expiration)
+11. Troubleshooting (firewall, printer not found, Zebra Browser Print not detected)
+
+### Step 8.7 — Final Testing Checklist
+
+1. `npm run build && npm run start` — app starts, data directory created, admin seeded
+2. Open http://localhost:3001 — login works
+3. Create operator user (verify max 6 enforcement)
+4. Add printer via Zebra Browser Print discovery
+5. Create template with DataMatrix + HRI text + static text
+6. LOT mode: print label → 3 HRI lines, no expiration on physical label
+7. SERIAL mode: print label → 4 HRI lines, with expiration on physical label
+8. Batch serial print: 10 labels → all unique serials, all correct
+9. Scan physical labels → data matches
+10. Print history shows all jobs
+11. Audit log shows all actions
+12. From another device on network: open http://[PC-IP]:3001 → can login and use the app
+
+---
+
+## IMPORTANT NOTES
+
+- JSON file storage — all data in `/data/*.json`. No database.
+- LOT mode = no expiration anywhere (form, barcode, HRI, ZPL). SERIAL mode = expiration everywhere.
+- Remote printing requires a queued job mechanism since Zebra Browser Print is local.
+- Bind to 0.0.0.0 for LAN access.

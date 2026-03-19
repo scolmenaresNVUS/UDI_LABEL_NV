@@ -1,0 +1,16 @@
+[
+  {
+    "id": "fdd9e00a-2313-4e40-87b7-6e2e1d8b2290",
+    "name": "Standard printer",
+    "connectionType": "zebra_browser_print",
+    "ipAddress": null,
+    "port": 9100,
+    "printerModel": "Zebra GK420D",
+    "dpi": 203,
+    "driver": "zebra_zpl",
+    "isDefault": true,
+    "createdBy": "59871b6f-06bd-4324-b543-68945e5efa2b",
+    "createdAt": "2026-03-04T18:48:20.129Z",
+    "updatedAt": "2026-03-04T18:48:20.129Z"
+  }
+]

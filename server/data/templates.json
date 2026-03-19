@@ -1,0 +1,518 @@
+[
+  {
+    "version": 1,
+    "isCurrent": false,
+    "name": "Square 1x1 inch",
+    "description": "Default 1x1 inch square label",
+    "widthMm": 25.4,
+    "heightMm": 25.4,
+    "dpi": 203,
+    "marginMm": 1,
+    "elements": [
+      {
+        "id": "a1b2c3d4-1111-4aaa-bbbb-000000000001",
+        "type": "datamatrix",
+        "x_mm": 1,
+        "y_mm": 1,
+        "moduleSize": 3,
+        "rotation": 0,
+        "locked": false
+      },
+      {
+        "id": "a1b2c3d4-1111-4aaa-bbbb-000000000002",
+        "type": "hri_text",
+        "x_mm": 1,
+        "y_mm": 14,
+        "fontSize": 4,
+        "fontFamily": "0",
+        "lineSpacing": 0.5,
+        "rotation": 0,
+        "locked": false
+      }
+    ],
+    "id": "sq1x1-default-0000-0000-000000000001",
+    "templateGroupId": "sq1x1-group-0000-0000-000000000001",
+    "createdBy": "59871b6f-06bd-4324-b543-68945e5efa2b",
+    "createdAt": "2026-03-04T21:19:54.833Z"
+  },
+  {
+    "version": 1,
+    "isCurrent": true,
+    "name": "Standard 2x1 inch",
+    "description": "Default medical device label",
+    "widthMm": 50.8,
+    "heightMm": 25.4,
+    "dpi": 203,
+    "marginMm": 1,
+    "elements": [
+      {
+        "id": "ee5691a4-2b3a-4b8d-abe4-697de8d1a1b7",
+        "type": "datamatrix",
+        "x_mm": 1.5,
+        "y_mm": 2,
+        "moduleSize": 4,
+        "rotation": 0,
+        "locked": false
+      },
+      {
+        "id": "19aa2fa3-ecb1-4f7d-b18b-4c0920af582b",
+        "type": "hri_text",
+        "x_mm": 22,
+        "y_mm": 2,
+        "fontSize": 7,
+        "fontFamily": "0",
+        "lineSpacing": 1.2,
+        "rotation": 0,
+        "locked": false
+      }
+    ],
+    "id": "601663ca-0eb6-4559-a120-46b60a11dd63",
+    "templateGroupId": "b44b9b4b-2a4a-4ca3-8521-c40d0ea0365d",
+    "createdBy": "59871b6f-06bd-4324-b543-68945e5efa2b",
+    "createdAt": "2026-03-04T21:19:54.833Z"
+  },
+  {
+    "version": 1,
+    "isCurrent": true,
+    "name": "Small 1.5x0.75 inch",
+    "description": "Compact label",
+    "widthMm": 38.1,
+    "heightMm": 19.05,
+    "dpi": 203,
+    "marginMm": 1,
+    "elements": [
+      {
+        "id": "b7225aba-a034-4ece-bd7b-a581ecf12d46",
+        "type": "datamatrix",
+        "x_mm": 1,
+        "y_mm": 1.5,
+        "moduleSize": 3,
+        "rotation": 0,
+        "locked": false
+      },
+      {
+        "id": "4268abfc-dcd8-4649-a199-505faaea4d70",
+        "type": "hri_text",
+        "x_mm": 15,
+        "y_mm": 1.5,
+        "fontSize": 5,
+        "fontFamily": "0",
+        "lineSpacing": 1,
+        "rotation": 0,
+        "locked": false
+      }
+    ],
+    "id": "7c441075-2045-4522-9085-b14ad267c863",
+    "templateGroupId": "3486c245-4b59-4570-993e-bd37953553ff",
+    "createdBy": "59871b6f-06bd-4324-b543-68945e5efa2b",
+    "createdAt": "2026-03-04T21:19:54.833Z"
+  },
+  {
+    "version": 1,
+    "isCurrent": true,
+    "name": "Large 3x2 inch",
+    "description": "Large label with extra text",
+    "widthMm": 76.2,
+    "heightMm": 50.8,
+    "dpi": 203,
+    "marginMm": 1,
+    "elements": [
+      {
+        "id": "aa473757-64a6-4515-9b30-be1987c677cd",
+        "type": "datamatrix",
+        "x_mm": 2,
+        "y_mm": 5,
+        "moduleSize": 5,
+        "rotation": 0,
+        "locked": false
+      },
+      {
+        "id": "b57d25d4-0129-46da-9bde-a9e26a246260",
+        "type": "hri_text",
+        "x_mm": 32,
+        "y_mm": 5,
+        "fontSize": 9,
+        "fontFamily": "0",
+        "lineSpacing": 1.5,
+        "rotation": 0,
+        "locked": false
+      },
+      {
+        "id": "1bda1398-0565-4b93-b2f9-d44d1dde1d92",
+        "type": "static_text",
+        "x_mm": 2,
+        "y_mm": 42,
+        "text": "Medical Device",
+        "fontSize": 8,
+        "fontFamily": "0",
+        "bold": true,
+        "rotation": 0,
+        "locked": false
+      }
+    ],
+    "id": "387c0c8d-5fe3-48c5-8b5d-33933a479644",
+    "templateGroupId": "64dc07af-9f3d-421c-801f-ccb0f97afb40",
+    "createdBy": "59871b6f-06bd-4324-b543-68945e5efa2b",
+    "createdAt": "2026-03-04T21:19:54.833Z"
+  },
+  {
+    "id": "f3da9eb5-191d-40b4-b454-f9962ffa419d",
+    "templateGroupId": "sq1x1-group-0000-0000-000000000001",
+    "version": 2,
+    "isCurrent": false,
+    "name": "Square 1x1 inch",
+    "description": "Default 1x1 inch square label",
+    "widthMm": 25.4,
+    "heightMm": 25.4,
+    "marginMm": 1,
+    "dpi": 203,
+    "elements": [
+      {
+        "id": "a1b2c3d4-1111-4aaa-bbbb-000000000001",
+        "type": "datamatrix",
+        "x_mm": 8.114717004794308,
+        "y_mm": 2.84705324305704,
+        "moduleSize": 3,
+        "rotation": 0,
+        "locked": false
+      },
+      {
+        "id": "a1b2c3d4-1111-4aaa-bbbb-000000000002",
+        "type": "hri_text",
+        "x_mm": 2.0033645260451935,
+        "y_mm": 14,
+        "fontSize": 4,
+        "fontFamily": "0",
+        "lineSpacing": 0.5,
+        "rotation": 0,
+        "locked": false
+      }
+    ],
+    "createdBy": "59871b6f-06bd-4324-b543-68945e5efa2b",
+    "createdAt": "2026-03-04T21:33:22.982Z"
+  },
+  {
+    "id": "2bb21abd-bc77-49bd-85ee-925d52d8bc16",
+    "templateGroupId": "sq1x1-group-0000-0000-000000000001",
+    "version": 3,
+    "isCurrent": false,
+    "name": "Square 1x1 inch",
+    "description": "Default 1x1 inch square label",
+    "widthMm": 25.4,
+    "heightMm": 25.4,
+    "marginMm": 1,
+    "dpi": 203,
+    "elements": [
+      {
+        "id": "a1b2c3d4-1111-4aaa-bbbb-000000000001",
+        "type": "datamatrix",
+        "x_mm": 7.351133645060365,
+        "y_mm": 2.5851521463456972,
+        "moduleSize": 3,
+        "rotation": 0,
+        "locked": false
+      },
+      {
+        "id": "a1b2c3d4-1111-4aaa-bbbb-000000000002",
+        "type": "hri_text",
+        "x_mm": 1.7525233945338963,
+        "y_mm": 16.257570183601686,
+        "fontSize": 4,
+        "fontFamily": "0",
+        "lineSpacing": 0.5,
+        "rotation": 0,
+        "locked": false
+      }
+    ],
+    "createdBy": "59871b6f-06bd-4324-b543-68945e5efa2b",
+    "createdAt": "2026-03-05T15:13:16.131Z"
+  },
+  {
+    "id": "a4067252-1525-4137-b2f1-d657ca770513",
+    "templateGroupId": "sq1x1-group-0000-0000-000000000001",
+    "version": 4,
+    "isCurrent": false,
+    "name": "Square 1x1 inch",
+    "description": "Default 1x1 inch square label",
+    "widthMm": 25.4,
+    "heightMm": 25.4,
+    "marginMm": 1,
+    "dpi": 203,
+    "elements": [
+      {
+        "id": "a1b2c3d4-1111-4aaa-bbbb-000000000001",
+        "type": "datamatrix",
+        "x_mm": 6.5438779589418665,
+        "y_mm": 2.7812609862723914,
+        "moduleSize": 3,
+        "rotation": 0,
+        "locked": false
+      },
+      {
+        "id": "a1b2c3d4-1111-4aaa-bbbb-000000000002",
+        "type": "hri_text",
+        "x_mm": 5.515140367203373,
+        "y_mm": 15.755887920579088,
+        "fontSize": 4,
+        "fontFamily": "0",
+        "lineSpacing": 0.5,
+        "rotation": 0,
+        "locked": false
+      }
+    ],
+    "createdBy": "59871b6f-06bd-4324-b543-68945e5efa2b",
+    "createdAt": "2026-03-05T15:29:19.223Z"
+  },
+  {
+    "id": "c61e4602-6f0b-46d7-b870-112d3c6952f6",
+    "templateGroupId": "sq1x1-group-0000-0000-000000000001",
+    "version": 5,
+    "isCurrent": false,
+    "name": "Square 1x1 inch",
+    "description": "Default 1x1 inch square label",
+    "widthMm": 25.4,
+    "heightMm": 25.4,
+    "marginMm": 1,
+    "dpi": 203,
+    "elements": [
+      {
+        "id": "a1b2c3d4-1111-4aaa-bbbb-000000000001",
+        "type": "datamatrix",
+        "x_mm": 6.937995505031918,
+        "y_mm": 3.2180555033982206,
+        "moduleSize": 3,
+        "rotation": 0,
+        "locked": false
+      },
+      {
+        "id": "a1b2c3d4-1111-4aaa-bbbb-000000000002",
+        "type": "hri_text",
+        "x_mm": 5.515140367203373,
+        "y_mm": 15.755887920579088,
+        "fontSize": 4,
+        "fontFamily": "0",
+        "lineSpacing": 0.5,
+        "rotation": 0,
+        "locked": false
+      }
+    ],
+    "createdBy": "59871b6f-06bd-4324-b543-68945e5efa2b",
+    "createdAt": "2026-03-05T15:29:58.390Z"
+  },
+  {
+    "id": "60bef3c4-5aaa-4fea-8f73-224abb4a4f0d",
+    "templateGroupId": "sq1x1-group-0000-0000-000000000001",
+    "version": 6,
+    "isCurrent": false,
+    "name": "Square 1x1 inch",
+    "description": "Default 1x1 inch square label",
+    "widthMm": 25.4,
+    "heightMm": 25.4,
+    "marginMm": 1,
+    "dpi": 203,
+    "elements": [
+      {
+        "id": "a1b2c3d4-1111-4aaa-bbbb-000000000001",
+        "type": "datamatrix",
+        "x_mm": 6.937995505031918,
+        "y_mm": 3.2180555033982206,
+        "moduleSize": 3,
+        "rotation": 0,
+        "locked": false
+      },
+      {
+        "id": "a1b2c3d4-1111-4aaa-bbbb-000000000002",
+        "type": "hri_text",
+        "x_mm": 5.515140367203373,
+        "y_mm": 15.755887920579088,
+        "fontSize": 4,
+        "fontFamily": "0",
+        "lineSpacing": 0.5,
+        "rotation": 0,
+        "locked": false
+      }
+    ],
+    "createdBy": "59871b6f-06bd-4324-b543-68945e5efa2b",
+    "createdAt": "2026-03-05T15:35:02.766Z"
+  },
+  {
+    "id": "a7b3d606-98ce-49d6-a35b-f998f1b63f88",
+    "templateGroupId": "sq1x1-group-0000-0000-000000000001",
+    "version": 7,
+    "isCurrent": false,
+    "name": "Square 1x1 inch",
+    "description": "Default 1x1 inch square label",
+    "widthMm": 25.4,
+    "heightMm": 25.4,
+    "marginMm": 1,
+    "dpi": 203,
+    "elements": [
+      {
+        "id": "a1b2c3d4-1111-4aaa-bbbb-000000000001",
+        "type": "datamatrix",
+        "x_mm": 6.937995505031918,
+        "y_mm": 3.2180555033982206,
+        "moduleSize": 7,
+        "rotation": 0,
+        "locked": false
+      },
+      {
+        "id": "a1b2c3d4-1111-4aaa-bbbb-000000000002",
+        "type": "hri_text",
+        "x_mm": 5.515140367203373,
+        "y_mm": 15.755887920579088,
+        "fontSize": 4,
+        "fontFamily": "0",
+        "lineSpacing": 0.5,
+        "rotation": 0,
+        "locked": false
+      }
+    ],
+    "createdBy": "59871b6f-06bd-4324-b543-68945e5efa2b",
+    "createdAt": "2026-03-05T15:35:20.501Z"
+  },
+  {
+    "id": "6fadb1da-788c-47eb-a4e5-f91c3494d96b",
+    "templateGroupId": "sq1x1-group-0000-0000-000000000001",
+    "version": 8,
+    "isCurrent": false,
+    "name": "Square 1x1 inch",
+    "description": "Default 1x1 inch square label",
+    "widthMm": 25.4,
+    "heightMm": 25.4,
+    "marginMm": 1,
+    "dpi": 203,
+    "elements": [
+      {
+        "id": "a1b2c3d4-1111-4aaa-bbbb-000000000001",
+        "type": "datamatrix",
+        "x_mm": 6.937995505031918,
+        "y_mm": 3.2180555033982206,
+        "moduleSize": 7,
+        "rotation": 0,
+        "locked": false
+      },
+      {
+        "id": "a1b2c3d4-1111-4aaa-bbbb-000000000002",
+        "type": "hri_text",
+        "x_mm": 3.27,
+        "y_mm": 15.26,
+        "fontSize": 6,
+        "fontFamily": "0",
+        "lineSpacing": 0.5,
+        "rotation": 0,
+        "locked": false
+      }
+    ],
+    "createdBy": "59871b6f-06bd-4324-b543-68945e5efa2b",
+    "createdAt": "2026-03-05T15:35:43.105Z"
+  },
+  {
+    "id": "3c5afc26-a8bd-479b-ab0b-5eb989a2e9e2",
+    "templateGroupId": "sq1x1-group-0000-0000-000000000001",
+    "version": 9,
+    "isCurrent": false,
+    "name": "Square 1x1 inch",
+    "description": "Default 1x1 inch square label",
+    "widthMm": 25.4,
+    "heightMm": 25.4,
+    "marginMm": 1,
+    "dpi": 203,
+    "elements": [
+      {
+        "id": "a1b2c3d4-1111-4aaa-bbbb-000000000001",
+        "type": "datamatrix",
+        "x_mm": 6.937995505031918,
+        "y_mm": 3.2180555033982206,
+        "moduleSize": 5,
+        "rotation": 0,
+        "locked": false
+      },
+      {
+        "id": "a1b2c3d4-1111-4aaa-bbbb-000000000002",
+        "type": "hri_text",
+        "x_mm": 3.27,
+        "y_mm": 15.26,
+        "fontSize": 6,
+        "fontFamily": "0",
+        "lineSpacing": 0.5,
+        "rotation": 0,
+        "locked": false
+      }
+    ],
+    "createdBy": "59871b6f-06bd-4324-b543-68945e5efa2b",
+    "createdAt": "2026-03-05T15:36:10.867Z"
+  },
+  {
+    "id": "9fdfa157-8df6-4734-99d8-9099265047d1",
+    "templateGroupId": "sq1x1-group-0000-0000-000000000001",
+    "version": 10,
+    "isCurrent": false,
+    "name": "Square 1x1 inch",
+    "description": "Default 1x1 inch square label",
+    "widthMm": 25.4,
+    "heightMm": 25.4,
+    "marginMm": 1,
+    "dpi": 203,
+    "elements": [
+      {
+        "id": "a1b2c3d4-1111-4aaa-bbbb-000000000001",
+        "type": "datamatrix",
+        "x_mm": 6.937995505031918,
+        "y_mm": 3.2180555033982206,
+        "moduleSize": 4,
+        "rotation": 0,
+        "locked": false
+      },
+      {
+        "id": "a1b2c3d4-1111-4aaa-bbbb-000000000002",
+        "type": "hri_text",
+        "x_mm": 3.27,
+        "y_mm": 15.26,
+        "fontSize": 6,
+        "fontFamily": "0",
+        "lineSpacing": 0.5,
+        "rotation": 0,
+        "locked": false
+      }
+    ],
+    "createdBy": "59871b6f-06bd-4324-b543-68945e5efa2b",
+    "createdAt": "2026-03-05T15:36:34.779Z"
+  },
+  {
+    "id": "cb906f60-f9c4-4b93-89bc-7137fd1aa286",
+    "templateGroupId": "sq1x1-group-0000-0000-000000000001",
+    "version": 11,
+    "isCurrent": true,
+    "name": "Square 1x1 inch",
+    "description": "Default 1x1 inch square label",
+    "widthMm": 25.4,
+    "heightMm": 25.4,
+    "marginMm": 1,
+    "dpi": 203,
+    "elements": [
+      {
+        "id": "a1b2c3d4-1111-4aaa-bbbb-000000000001",
+        "type": "datamatrix",
+        "x_mm": 6.937995505031918,
+        "y_mm": 2.72,
+        "moduleSize": 4,
+        "rotation": 0,
+        "locked": false
+      },
+      {
+        "id": "a1b2c3d4-1111-4aaa-bbbb-000000000002",
+        "type": "hri_text",
+        "x_mm": 3.27,
+        "y_mm": 15.26,
+        "fontSize": 6,
+        "fontFamily": "0",
+        "lineSpacing": 0.5,
+        "rotation": 0,
+        "locked": false
+      }
+    ],
+    "createdBy": "59871b6f-06bd-4324-b543-68945e5efa2b",
+    "createdAt": "2026-03-05T15:39:06.301Z"
+  }
+]

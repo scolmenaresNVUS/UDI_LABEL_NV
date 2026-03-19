@@ -1,0 +1,489 @@
+# AGENT 4 — QA: Frontend, UX & Label Accuracy
+
+You are a QA engineer auditing a GS1 DataMatrix UDI Label Management System for medical devices. This system MUST comply with FDA 21 CFR 801.45 and EU MDR 2017/745 — label accuracy is not optional, it's regulatory.
+
+Your job: systematically test every frontend feature, find bugs, identify glitches, and flag unfinished or missing features. You will produce a structured bug report at the end.
+
+Read the full codebase before starting. Run the application locally. Test everything in a real browser (Chrome recommended, since Zebra Browser Print requires it).
+
+---
+
+## THE #1 BUSINESS RULE TO VERIFY
+
+**LOT MODE labels must NEVER contain expiration date information — not in the form, not in the DataMatrix barcode, not in the HRI text, not in the ZPL output, not on the physical printed label.**
+
+**SERIAL MODE labels MUST contain expiration date — in the form, the DataMatrix barcode, the HRI text, the ZPL output, and the physical printed label.**
+
+If this rule is violated ANYWHERE, it is a **CRITICAL / REGULATORY** severity bug.
+
+---
+
+## TEST ENVIRONMENT SETUP
+
+1. Clone the repo, run `npm run setup && npm run dev`
+2. Open Chrome at http://localhost:5173 (or wherever Vite serves)
+3. Login as admin (admin / ChangeMe123!)
+4. Have a phone with a DataMatrix barcode scanner app ready (e.g., "QR & Barcode Scanner" or similar)
+5. If a Zebra GK420D printer is available, install Zebra Browser Print and connect it
+
+---
+
+## TEST SUITE 1: AUTHENTICATION & USER MANAGEMENT
+
+### T1.1 — Login Flow
+- [ ] Navigate to /login — page renders correctly
+- [ ] Submit empty form — validation errors shown (not a raw 400 error)
+- [ ] Submit wrong password — clear error message (not "500 Internal Server Error")
+- [ ] Submit correct credentials — redirects to main page, sidebar shows username
+- [ ] Refresh the page after login — session persists (JWT in cookie works)
+- [ ] Close browser tab, reopen — session persists until expiry
+- [ ] Click logout — redirected to login, cannot access protected pages
+
+### T1.2 — Authorization
+- [ ] Login as operator — admin-only sidebar items (Users, Printers, Audit Log) are hidden
+- [ ] As operator, manually navigate to /admin/users — redirected or shown "Access Denied"
+- [ ] As operator, try API call: `POST /api/auth/users` via DevTools — returns 403
+- [ ] As admin — all sidebar items visible and accessible
+
+### T1.3 — User Management
+- [ ] Admin: create a new operator user — appears in user list
+- [ ] User data persists in data/users.json after server restart
+- [ ] Try creating a 7th user (if 6 exist) — rejected with clear message
+- [ ] Deactivate a user — they cannot login
+- [ ] Reset a user's password — they can login with new password
+
+### T1.4 — Edge Cases
+- [ ] Login with SQL injection string as username (e.g., `' OR 1=1 --`) — no error, just "Invalid credentials"
+- [ ] Login with very long password (1000+ chars) — no crash
+- [ ] Open two browser tabs, logout in one — the other redirects to login on next action
+- [ ] Extremely rapid login attempts (click submit 10 times fast) — no duplicate sessions or errors
+
+**BUG REPORT TEMPLATE for each issue found:**
+```
+BUG ID: T1.X-N
+SEVERITY: Critical / High / Medium / Low
+COMPONENT: [component name]
+STEPS TO REPRODUCE:
+1. ...
+2. ...
+EXPECTED: ...
+ACTUAL: ...
+SCREENSHOT: [describe what you see]
+```
+
+---
+
+## TEST SUITE 2: LABEL DATA FORM & LOT/SERIAL TOGGLE
+
+### T2.1 — Identifier Mode Toggle
+- [ ] Default state: which mode is selected? Document it.
+- [ ] Switch to LOT → Lot Number field appears, Serial Number field hidden
+- [ ] Switch to LOT → Expiration Date field COMPLETELY hidden (not just disabled — fully gone)
+- [ ] Switch to LOT → Auto-expiration calculator COMPLETELY hidden
+- [ ] Switch to SERIAL → Serial Number field appears, Lot Number field hidden
+- [ ] Switch to SERIAL → Expiration Date field appears
+- [ ] Switch to SERIAL → Auto-expiration calculator toggle appears
+- [ ] Rapidly toggle LOT/SERIAL 20 times — no UI glitches, no orphaned fields, no console errors
+
+### T2.2 — GTIN Validation
+- [ ] Enter valid GTIN "00850008393006" → green checkmark
+- [ ] Enter invalid check digit "00850008393007" → red X with message "Invalid check digit (expected 6)"
+- [ ] Enter 13 digits → error "Must be 14 digits"
+- [ ] Enter 15 digits → error "Must be 14 digits"
+- [ ] Enter letters "0085000839300A" → error "Must contain only numbers"
+- [ ] Paste a GTIN with spaces "00850 00839 3006" → should either auto-strip spaces or show error
+- [ ] Empty GTIN → required field error when trying to proceed
+
+### T2.3 — Lot Number Input (LOT mode)
+- [ ] Accept alphanumeric: "MG96CI-260116" → valid
+- [ ] Accept hyphens, numbers, uppercase, lowercase
+- [ ] Reject if > 20 characters → error shown
+- [ ] Empty lot number → required field error
+
+### T2.4 — Serial Number Input (SERIAL mode)
+- [ ] Accept alphanumeric: "ABC0001" → valid
+- [ ] Reject if > 20 characters
+- [ ] Empty serial → required field error
+
+### T2.5 — Date Inputs
+- [ ] Manufacturing date defaults to today
+- [ ] Can select any past or future date
+- [ ] Expiration date (serial mode only): must be after manufacturing date
+- [ ] Set manufacturing date AFTER expiration date → validation error shown
+- [ ] Change manufacturing date → if auto-expiration enabled, expiration updates
+
+### T2.6 — Automatic Expiration Calculator (SERIAL mode only)
+- [ ] Toggle ON → interval inputs appear (years, months, days)
+- [ ] Set manufacturing date 2026-02-18, interval 7 years → expiration shows 2033-02-18
+- [ ] Set manufacturing date 2026-01-31, interval 1 month → expiration shows 2026-02-28 (NOT 2026-02-31)
+- [ ] Set manufacturing date 2024-02-29, interval 1 year → expiration shows 2025-02-28 (leap year edge)
+- [ ] Set manufacturing date 2026-03-31, interval 1 month → expiration shows 2026-04-30
+- [ ] Set interval to 0/0/0 → should require at least one non-zero value or show error
+- [ ] Expiration field is read-only when auto-calc is on
+- [ ] "Override" button unlocks manual editing
+- [ ] Toggle OFF → expiration field becomes manually editable again
+
+### T2.7 — Form State Persistence
+- [ ] Fill in all fields → navigate to Products page → navigate back → are fields preserved?
+- [ ] If fields are lost, is this documented behavior or a bug?
+
+---
+
+## TEST SUITE 3: LIVE BARCODE PREVIEW
+
+### T3.1 — DataMatrix Preview Rendering
+- [ ] With all fields valid → DataMatrix barcode renders in preview panel
+- [ ] Remove GTIN (make invalid) → preview shows placeholder or disappears gracefully
+- [ ] Barcode updates as you type (with ~300ms debounce, not instant)
+- [ ] No console errors during rendering
+- [ ] Barcode is not blurry or pixelated at normal zoom
+
+### T3.2 — HRI Text Preview (CRITICAL — lot vs serial, line ORDER matters)
+- [ ] **LOT MODE:** HRI shows EXACTLY 3 lines in THIS ORDER:
+  ```
+  (01) 00850008393006
+  (10) MG96CI-260116
+  (11) 260116
+  ```
+  - Line 1 = GTIN (01)
+  - Line 2 = Lot number (10) — the identifier, NOT a date
+  - Line 3 = Manufacturing date (11)
+  - NO line containing "(17)" — if there is, this is a CRITICAL BUG
+  - If line 2 is a date instead of the lot number, this is a CRITICAL BUG (wrong order)
+- [ ] **SERIAL MODE:** HRI shows EXACTLY 4 lines in THIS ORDER:
+  ```
+  (01) 00850008393006
+  (21) BWIII2026-1234
+  (11) 260218
+  (17) 330218
+  ```
+  - Line 1 = GTIN (01)
+  - Line 2 = Serial number (21) — the identifier, NOT a date
+  - Line 3 = Manufacturing date (11)
+  - Line 4 = Expiration date (17)
+  - Must include "(17)" line — if missing, this is a CRITICAL BUG
+  - If line 2 is a date instead of the serial number, this is a CRITICAL BUG (wrong order)
+- [ ] HRI text updates in real time as form data changes
+- [ ] Date format in HRI is YYMMDD (not YYYY-MM-DD or other format)
+- [ ] Serial numbers with special characters display correctly: "BWIII2026-1234" renders as-is, no truncation
+
+### T3.3 — Barcode Scan Verification
+- [ ] **LOT MODE:** Scan the preview DataMatrix with phone app → decoded data contains AI 01, 10, 11 — does NOT contain AI 17
+- [ ] **SERIAL MODE:** Scan preview DataMatrix → decoded data contains AI 01, 17, 11, 21
+- [ ] GTIN in scanned data matches exactly what was entered
+- [ ] Lot/serial number in scanned data matches exactly
+- [ ] Dates in scanned data are correctly formatted as YYMMDD
+
+---
+
+## TEST SUITE 4: LABEL TEMPLATE DESIGNER
+
+### T4.1 — Label Size & Shape Configuration
+- [ ] Create new template → "New Template" dialog appears
+- [ ] **Preset dropdown:** select "2" × 1" (standard)" → width and height auto-fill (50.8mm × 25.4mm or 2" × 1")
+- [ ] **Preset dropdown:** select "1" × 1" (square small)" → canvas is square
+- [ ] **Preset dropdown:** select "Custom" → width and height inputs become editable
+- [ ] Enter custom size 30mm × 15mm → canvas has correct rectangular proportions
+- [ ] Enter custom size 40mm × 40mm → canvas is square
+- [ ] **Unit toggle:** switch to inches → dimensions display in inches (e.g., 50.8mm → 2.000")
+- [ ] Enter dimensions in inches: 2.5" × 1.25" → internally stored as 63.5mm × 31.75mm
+- [ ] Switch back to mm → shows 63.5mm × 31.75mm (not 2.5 × 1.25)
+- [ ] Minimum size enforced: try 5mm × 5mm → rejected or warned
+- [ ] Very small label (10mm × 10mm) → canvas renders without breaking
+
+### T4.2 — Canvas & Safe Zone
+- [ ] Canvas shows white label surface with gray border
+- [ ] **Margin safe zone:** dashed inner border visible inside the label edges (default 1mm inset)
+- [ ] Change margin to 2mm → dashed border moves inward
+- [ ] Set margin to 0mm → dashed border disappears (prints edge-to-edge, risky but allowed)
+
+### T4.3 — Element Positioning & Boundary Warnings
+- [ ] Add DataMatrix → placeholder appears on canvas
+- [ ] **Drag DataMatrix** to center of label → position updates smoothly
+- [ ] **Drag DataMatrix partially outside label edge** → element gets red dashed border + ⚠ icon
+- [ ] Drag it back inside → red warning disappears
+- [ ] **Drag DataMatrix outside the margin but inside the label** → orange/yellow warning (soft warning, not red)
+- [ ] **Properties panel:** type exact X=2, Y=2 (mm) → element jumps to that position
+- [ ] **Properties panel in inches mode:** type X=0.1, Y=0.1 → element positions at 2.54mm, 2.54mm
+- [ ] **Arrow key nudge:** select element, press Right arrow → moves 0.25mm right
+- [ ] **Shift+Arrow nudge:** moves 1mm per press
+- [ ] Nudge 4 times (4 × 0.25mm = 1mm) → verify position changed by exactly 1mm in properties panel
+- [ ] Nudge element past label edge → boundary warning appears
+
+### T4.4 — Element CRUD
+- [ ] Add DataMatrix → appears on canvas. Add second → rejected (max 1) or button disabled
+- [ ] Add HRI Text → text block appears. Add second → rejected (max 1)
+- [ ] Remove HRI Text → yellow compliance warning banner appears
+- [ ] Add Static Text → editable text appears
+- [ ] Add Line → line appears
+- [ ] Add Rectangle → rectangle appears
+- [ ] Select element → properties panel shows on the right
+- [ ] Delete selected element (Delete key) → confirmation → element removed
+- [ ] Undo after delete → element restored
+- [ ] Redo → element deleted again
+
+### T4.5 — Unit Toggle Behavior
+- [ ] Toggle to mm → all coordinates and dimensions show in mm
+- [ ] Toggle to inches → all coordinates and dimensions convert to inches (3 decimal places)
+- [ ] Toggle back to mm → values match original mm values exactly (no rounding drift)
+- [ ] Edit a value in inches (e.g., change X from 0.079" to 0.100") → stored as 2.54mm
+- [ ] Properties panel step size adapts: 0.25mm step in mm mode, 0.01" step in inches mode
+
+### T4.6 — Properties Panel
+- [ ] Select DataMatrix → can change module size, estimated size updates
+- [ ] Select HRI Text → can change font size, font family, line spacing
+- [ ] Select Static Text → can edit text content, change font size
+- [ ] Change any property → canvas updates in real time
+- [ ] Set position to negative values → handled (clamped to 0 or shows boundary warning)
+- [ ] **Boundary indicator:** position element outside margin → "⚠ Outside print area" shown in properties panel
+
+### T4.7 — Template Save/Load
+- [ ] Save template with name → appears in template list
+- [ ] Data persists in data/templates.json (including widthMm, heightMm, marginMm)
+- [ ] Load template → all elements restored in correct positions, correct label dimensions
+- [ ] Load a square template → canvas is square
+- [ ] Load a rectangular template → canvas matches aspect ratio
+- [ ] Edit template, save → version 2 created (version 1 preserved)
+- [ ] View version history → shows all versions
+- [ ] Duplicate template → creates independent copy with "(Copy)" suffix
+- [ ] Delete template (admin) → removed from list
+- [ ] Operator tries to delete → rejected or button hidden
+
+### T4.8 — Default Templates & Grid
+- [ ] On first run, default templates exist (Standard 2×1, Small 1.5×0.75, Large 3×2)
+- [ ] Load each default → elements positioned correctly, canvas dimensions correct
+- [ ] Toggle grid ON → faint 0.5mm grid lines visible
+- [ ] Snap-to-grid: drag element → snaps to 0.5mm increments
+- [ ] Toggle grid OFF → grid disappears, free positioning restored
+- [ ] Zoom 50% → canvas shrinks, still usable
+- [ ] Zoom 200% → canvas enlarges, fine positioning easier
+
+### T4.9 — Template Import/Export
+- [ ] **Export single template:** click Export on a template → .gslabel file downloads
+- [ ] Downloaded filename follows pattern: `{name}-v{version}.gslabel` (e.g., `standard-2x1-medical-device-v3.gslabel`)
+- [ ] Open downloaded file in a text editor → valid JSON with formatVersion, exportedAt, template data
+- [ ] Template elements all present in exported JSON with correct positions and properties
+- [ ] **Export All:** click "Export All" on template list → .gslabel-pack file downloads
+- [ ] .gslabel-pack contains all current templates (verify count matches list)
+- [ ] **Import single template:** click "Import Template" → file picker → select .gslabel → template appears in list
+- [ ] Imported template has all elements positioned correctly (verify in designer)
+- [ ] Imported template gets a NEW id (independent from source)
+- [ ] **Import with name conflict:** export a template, import again without deleting → conflict dialog appears
+  - [ ] "Import as copy" → creates template with " (Imported)" suffix
+  - [ ] "Replace existing" → overwrites existing template (new version)
+  - [ ] "Skip" → no import, no changes
+- [ ] **Import .gslabel-pack:** multi-template pack → all templates imported, conflicts resolved per-template
+- [ ] **"Apply to all remaining" checkbox** → applies same choice to remaining conflicts
+- [ ] **Drag-and-drop import:** drag .gslabel file onto template list page → import starts
+- [ ] **Invalid file:** import a .txt file → clear error: "Invalid template file: ..."
+- [ ] **Broken JSON:** import invalid JSON → error message, no crash
+- [ ] **Oversized file (>5MB):** rejected with message
+- [ ] **Round-trip test:** Export → Delete → Import → template identical to original
+- [ ] **20-template stress test:** create or import 20 templates → all listed correctly, no performance issues
+
+---
+
+## TEST SUITE 5: BATCH PRINTING & LABEL EXPORT
+
+### T5.1 — LOT Mode Printing
+- [ ] Select LOT mode → batch config shows only "Number of copies" input
+- [ ] NO serial pattern builder visible
+- [ ] Set copies to 50 → confirmation shows "50 identical labels"
+- [ ] Confirmation dialog does NOT show expiration date
+
+### T5.2 — SERIAL Mode Single Label
+- [ ] Select SERIAL mode, "Single Label" → only serial number input shown
+- [ ] Confirmation shows single serial and expiration date
+
+### T5.3 — SERIAL Mode Batch
+- [ ] Select "Batch Print" → serial pattern builder appears
+- [ ] Set prefix="ABC", start=234, end=298, step=1 → preview shows ABC234...ABC298
+- [ ] Total count shows 65
+- [ ] Set prefix="", suffix="-X", start=1, end=50, pad=4 → preview shows 0001-X...0050-X
+- [ ] Total count shows 50
+- [ ] Set start > end → validation error
+- [ ] Set step=0 → validation error
+- [ ] Set step=5, start=1, end=50 → generates 1,6,11,...,46 → count=10
+- [ ] Zero-pad auto-suggestion: end=999 → suggests pad 3, end=1000 → suggests pad 4
+
+### T5.4 — Print Confirmation & Export Buttons
+- [ ] Summary shows all correct data
+- [ ] LOT mode: no expiration line in summary
+- [ ] SERIAL mode: expiration line present in summary
+- [ ] "I confirm" checkbox required before Print AND Export buttons enable
+- [ ] Print button disabled until checkbox checked
+- [ ] **"Save as PDF" button visible** next to Print button
+- [ ] **"Save as PNG" button visible** next to Print button
+
+### T5.5 — Single Label Export (PNG)
+- [ ] **LOT mode:** fill data → click "Save as PNG" → PNG downloads
+- [ ] Open PNG → shows DataMatrix + 3 HRI lines, NO expiration
+- [ ] Filename follows pattern: `{gtin}-{lot}-label.png`
+- [ ] Image is not blurry (rendered at printer DPI, not screen DPI)
+- [ ] **SERIAL mode:** fill data → "Save as PNG" → PNG downloads
+- [ ] Open PNG → shows DataMatrix + 4 HRI lines, WITH expiration
+
+### T5.6 — Single Label Export (PDF)
+- [ ] **LOT mode:** click "Save as PDF" → PDF downloads
+- [ ] Open PDF → single page, page size matches label dimensions (e.g., 2" × 1")
+- [ ] Label content correct: DataMatrix + 3 HRI lines, no expiration
+- [ ] **SERIAL mode:** click "Save as PDF" → PDF with 4 HRI lines + expiration
+- [ ] PDF is not a standard letter-size page with a tiny label — it IS the label size
+- [ ] Print the PDF at 100% scale → physical output matches label dimensions
+
+### T5.7 — Batch Export (PDF)
+- [ ] Configure serial batch ABC001 to ABC005 (5 labels)
+- [ ] Click "Save as PDF" → PDF downloads
+- [ ] PDF has exactly 5 pages
+- [ ] Page 1: serial ABC001, Page 2: ABC002, ..., Page 5: ABC005
+- [ ] All pages same physical size matching label dimensions
+- [ ] All pages have correct GTIN, dates, and expiration (serial mode)
+- [ ] Filename includes batch range: `{gtin}-batch-ABC001-ABC005.pdf`
+
+### T5.8 — Batch Export (PNG ZIP)
+- [ ] Configure same 5-label batch → click "Save as PNGs (ZIP)" → ZIP downloads
+- [ ] Extract ZIP → 5 PNG files
+- [ ] Filenames: `{gtin}-ABC001.png`, `{gtin}-ABC002.png`, ..., `{gtin}-ABC005.png`
+- [ ] Each PNG has the correct unique serial number
+- [ ] Open 3 random PNGs → all correct
+
+### T5.9 — Export Edge Cases
+- [ ] **Export with incomplete form** (missing GTIN) → export buttons disabled
+- [ ] **Export with no template selected** → export buttons disabled
+- [ ] **Large batch export (501+ serials):** PDF/PNG export buttons disabled with tooltip about 500 limit
+- [ ] **Batch of exactly 500:** export buttons enabled, export works
+- [ ] **Export while Labelary API is down:** clear error message "Could not generate label preview. Check internet connection."
+- [ ] **Loading state:** export button shows spinner while generating, prevents double-click
+
+### T5.10 — Print Progress
+- [ ] Progress bar advances during printing
+- [ ] Current label count updates
+- [ ] Pause button works → printing stops after current chunk
+- [ ] Resume after pause → continues from correct position
+- [ ] Cancel → confirmation dialog → stops printing
+- [ ] Completion message shown with total printed
+- [ ] If printer disconnected mid-print → error shown, not app crash
+
+### T5.11 — Print History
+- [ ] Completed job appears in history
+- [ ] All fields correct (LOT jobs show no expiration, SERIAL jobs show expiration)
+- [ ] Click job → detail view with all info
+- [ ] Reprint button pre-fills form correctly
+- [ ] Operator sees only own jobs, admin sees all
+
+---
+
+## TEST SUITE 6: PRINTER MANAGEMENT & LAN PRINT QUEUE
+
+### T6.1 — Zebra Browser Print Detection
+- [ ] On the server PC (with USB printer and Zebra Browser Print running) → "Active" badge shown
+- [ ] On a LAN PC (no Zebra Browser Print) → setup guide shown OR detection gracefully fails
+- [ ] "Retry Detection" button works on the server PC
+
+### T6.2 — Printer CRUD
+- [ ] Add USB printer via discovery → saves to data/printers.json
+- [ ] Add network printer with IP and port → saves correctly
+- [ ] Edit printer name → updates
+- [ ] Delete printer (no print jobs) → removed
+- [ ] Delete printer (has print jobs) → rejected with message
+- [ ] Set as default → only one default at a time
+
+### T6.3 — LAN Print Queue
+- [ ] **From server PC:** Print a label → prints immediately (no queue needed, Zebra Browser Print is local)
+- [ ] **From a LAN PC:** Print a label → job status becomes "queued" (NOT "printing")
+- [ ] **From a LAN PC:** UI shows feedback: "Job queued — the printer operator will process it" (or similar)
+- [ ] **On server PC:** Print Queue panel is visible on the main page
+- [ ] **On server PC:** Queued jobs appear in the Print Queue panel within 5 seconds
+- [ ] **On server PC:** Each queued job shows: who queued it, template name, GTIN, label count
+- [ ] **On server PC:** Click "Print Now" on a queued job → label prints on physical printer → status updates to "completed"
+- [ ] **On server PC:** Click "Print All Queued" → all queued jobs print sequentially
+- [ ] **On LAN PC:** "Print Now" button is disabled or hidden (since Zebra Browser Print is not on this machine)
+- [ ] **On LAN PC:** Tooltip or message explains why: "Printing available from the printer PC only"
+- [ ] **Stress test:** Queue 5 jobs from different LAN PCs → all appear in queue → print all → all 5 complete correctly
+
+---
+
+## TEST SUITE 7: CROSS-CUTTING CONCERNS
+
+### T7.1 — Responsive Design
+- [ ] At 1920×1080 → layout correct
+- [ ] At 1366×768 → layout usable, no overflow
+- [ ] At 768px width (tablet) → main pages usable
+- [ ] At 375px width (phone) → login and basic pages work
+
+### T7.2 — Error Handling
+- [ ] Stop the server → frontend shows connection error (not blank page)
+- [ ] Corrupt a JSON file (add invalid JSON) → server shows meaningful error, doesn't crash
+- [ ] 404 page for unknown routes → handled gracefully
+
+### T7.3 — Console Errors
+- [ ] Open Chrome DevTools Console
+- [ ] Navigate through every page — note ANY console errors or warnings
+- [ ] Report all `TypeError`, `undefined`, `null` errors
+- [ ] Report React key warnings, missing dependency warnings
+
+### T7.4 — Accessibility Basics
+- [ ] Tab key navigates between form fields in logical order
+- [ ] Enter key submits forms
+- [ ] Error messages are visible and readable
+- [ ] Buttons have readable text (no icon-only buttons without aria-label)
+
+---
+
+## TEST SUITE 8: DATA PERSISTENCE
+
+- [ ] Create a product, template, and print job → restart the server → all data still exists
+- [ ] Check data/users.json, products.json, templates.json, print-jobs.json, audit-log.json — all contain expected data
+- [ ] Audit log: verify entries exist for login, user creation, template creation, print job
+- [ ] Audit log: no UPDATE or DELETE operations have been performed on it (append-only)
+
+---
+
+## OUTPUT FORMAT
+
+After completing all tests, produce a bug report with this structure:
+
+```markdown
+# QA Report — Frontend, UX & Label Accuracy
+## Date: [date]
+## Tester: Agent 4
+## Build: [commit hash or version]
+
+## Summary
+- Total tests executed: X
+- Passed: X
+- Failed: X (Y critical, Z high, W medium, V low)
+- Blocked: X (could not test due to [reason])
+
+## Critical Bugs (regulatory/data accuracy)
+[List all critical bugs with full details]
+
+## High Severity Bugs
+[List all high bugs]
+
+## Medium Severity Bugs
+[List all medium bugs]
+
+## Low Severity / Polish Issues
+[List all low bugs]
+
+## Unfinished / Missing Features
+[List features that are documented in the prompts but not implemented]
+
+## Recommendations
+[Prioritized list of what to fix first]
+```
+
+For each bug, use this format:
+```
+BUG ID: T[suite].[test]-[N]
+SEVERITY: Critical / High / Medium / Low
+COMPONENT: [file or component name]
+STEPS TO REPRODUCE:
+1. [exact steps]
+2. [exact steps]
+EXPECTED: [what should happen]
+ACTUAL: [what actually happens]
+IMPACT: [why this matters — especially for critical/regulatory bugs]
+SUGGESTED FIX: [if obvious]
+```

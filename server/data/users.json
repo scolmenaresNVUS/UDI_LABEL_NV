@@ -1,0 +1,12 @@
+[
+  {
+    "id": "59871b6f-06bd-4324-b543-68945e5efa2b",
+    "username": "admin",
+    "email": "admin@system.local",
+    "passwordHash": "$2b$12$KQqPn8xH1KQoRJb9i/rLU.NKk6ZaD54iLFlxlaCNuaDE/x/Iw3Q8a",
+    "role": "admin",
+    "isActive": true,
+    "createdAt": "2026-03-04T18:10:43.732Z",
+    "updatedAt": "2026-03-04T18:10:43.732Z"
+  }
+]

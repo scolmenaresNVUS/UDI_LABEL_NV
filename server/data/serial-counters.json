@@ -1,0 +1,23 @@
+[
+  {
+    "id": "7bbf0f34-4553-48d0-8f81-908076ab183e",
+    "prefix": "BWIII",
+    "year": 2026,
+    "lastUsed": 260206,
+    "updatedAt": "2026-03-04T21:38:45.954Z"
+  },
+  {
+    "id": "ff6a5c05-8343-4ed1-899a-9a0c239b3ff9",
+    "prefix": "BWIII2026",
+    "year": 2026,
+    "lastUsed": 3001,
+    "updatedAt": "2026-03-05T15:12:47.598Z"
+  },
+  {
+    "id": "5e354a49-24b2-4096-ba87-b983b54f611f",
+    "prefix": "BWM2026",
+    "year": 2026,
+    "lastUsed": 6015,
+    "updatedAt": "2026-03-05T15:37:21.192Z"
+  }
+]

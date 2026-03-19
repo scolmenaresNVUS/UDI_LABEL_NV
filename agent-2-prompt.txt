@@ -1,0 +1,476 @@
+# AGENT 2: Label Template Designer & ZPL Generation (Phases 4–5)
+
+You are continuing development of a GS1 DataMatrix UDI Label Management System for medical devices. Phases 1–3 are complete: project foundation with JSON file storage, barcode engine, and data input UI. You are responsible for Phases 4–5: the label template designer and ZPL II command generation.
+
+Read this entire prompt before writing any code. Familiarize yourself with the existing codebase first.
+
+---
+
+## CRITICAL LABEL FORMAT RULE
+
+**LOT MODE:** Encodes (01) GTIN + (10) Lot + (11) Manufacturing Date. NO expiration date.
+**SERIAL MODE:** Encodes (01) GTIN + (17) Expiration + (11) Manufacturing + (21) Serial. WITH expiration date.
+
+**IMPORTANT — Encoding order vs HRI display order are DIFFERENT:**
+
+DataMatrix ENCODING order (optimized for barcode — fixed-length AIs first):
+- LOT: `(01)GTIN(11)YYMMDD(10)LOT`
+- SERIAL: `(01)GTIN(17)YYMMDD(11)YYMMDD(21)SERIAL`
+
+HRI DISPLAY order (human-readable text printed on the label — identifier right after GTIN):
+- LOT: `(01) GTIN` → `(10) LOT` → `(11) YYMMDD`
+- SERIAL: `(01) GTIN` → `(21) SERIAL` → `(11) YYMMDD` → `(17) YYMMDD`
+
+The ZPL `^BX` command uses the ENCODING order. The ZPL `^FD` text commands for HRI use the DISPLAY order. These must be implemented separately.
+
+---
+
+## EXISTING CODEBASE CONTEXT
+
+Already built and working:
+- React + TypeScript + Vite + Tailwind frontend
+- Express + TypeScript backend with **JSON file storage** (no SQL database)
+- `JsonStore<T>` class in `server/src/services/jsonStore.ts` for all data operations
+- All stores in `server/src/stores/index.ts`: userStore, productStore, templateStore, printerStore, printJobStore, auditLogStore
+- Auth system: JWT in HTTP-only cookies, admin/operator roles
+- GS1 encoding: `gs1Encoder.ts` (builds element strings differently for lot vs serial mode)
+- `buildHriText()` returns 3 lines for lot mode, 4 lines for serial mode
+- Barcode preview with bwip-js
+- Label data form with lot/serial toggle, live DataMatrix preview
+- Product profiles
+
+Key storage detail: Templates are stored in `data/templates.json` as an array of template objects. Use `templateStore` (a `JsonStore<LabelTemplate>`) for all read/write operations. Template versioning uses `templateGroupId` and `version` fields — multiple records with the same `templateGroupId` represent different versions.
+
+---
+
+## FILES YOU WILL CREATE
+
+```
+client/src/components/LabelDesigner/
+├── LabelDesigner.tsx
+├── DesignerCanvas.tsx
+├── ElementToolbar.tsx
+├── ElementProperties.tsx
+├── TemplateManager.tsx
+├── TemplateList.tsx
+├── TemplateImportExport.tsx       # Import/export UI, file parsing, conflict resolution
+├── elements/
+│   ├── types.ts
+│   ├── DataMatrixElement.tsx
+│   ├── HriTextElement.tsx
+│   ├── StaticTextElement.tsx
+│   ├── LineElement.tsx
+│   └── RectangleElement.tsx
+
+client/src/types/template.types.ts
+
+server/src/routes/templates.routes.ts
+server/src/controllers/templates.controller.ts
+server/src/services/zpl.service.ts
+```
+
+Install: `cd client && npm install react-konva konva`
+
+---
+
+## PHASE 4: LABEL TEMPLATE DESIGNER
+
+### Step 4.1 — Element Type Definitions
+
+`client/src/types/template.types.ts`:
+
+```typescript
+/**
+ * All internal measurements are stored in mm.
+ * The UI allows the user to toggle between mm and inches.
+ * Conversion: 1 inch = 25.4 mm. Display converts on the fly; stored values are always mm.
+ */
+
+export type MeasurementUnit = 'mm' | 'in';
+
+export interface BaseElement {
+  id: string;
+  type: ElementType;
+  x_mm: number;            // position always stored in mm
+  y_mm: number;            // position always stored in mm
+  rotation: 0 | 90 | 180 | 270;
+  locked: boolean;
+}
+
+export type ElementType = 'datamatrix' | 'hri_text' | 'static_text' | 'line' | 'rectangle';
+
+export interface DataMatrixElementData extends BaseElement {
+  type: 'datamatrix';
+  moduleSize: number; // cell size in dots, default 4 for 203 DPI
+}
+
+export interface HriTextElementData extends BaseElement {
+  type: 'hri_text';
+  fontSize: number;
+  fontFamily: string; // ZPL font: '0','A','B',...,'H'
+  lineSpacing: number; // mm between lines
+  // Content auto-generated — adapts to lot/serial mode:
+  // LOT: 3 lines (01, 10, 11)
+  // SERIAL: 4 lines (01, 17, 11, 21)
+}
+
+export interface StaticTextElementData extends BaseElement {
+  type: 'static_text';
+  text: string;
+  fontSize: number;
+  fontFamily: string;
+  bold: boolean;
+}
+
+export interface LineElementData extends BaseElement {
+  type: 'line';
+  endX_mm: number;
+  endY_mm: number;
+  thickness: number;
+}
+
+export interface RectangleElementData extends BaseElement {
+  type: 'rectangle';
+  width_mm: number;
+  height_mm: number;
+  borderThickness: number;
+  filled: boolean;
+}
+
+export type LabelElement =
+  | DataMatrixElementData
+  | HriTextElementData
+  | StaticTextElementData
+  | LineElementData
+  | RectangleElementData;
+
+/**
+ * Label shape can be any rectangle (including square when width === height).
+ * Dimensions are ALWAYS stored in mm internally.
+ * The UI shows a unit toggle (mm / inches) — conversion is display-only.
+ */
+export interface LabelTemplate {
+  id: string;
+  templateGroupId: string;
+  version: number;
+  isCurrent: boolean;
+  name: string;
+  description?: string;
+  widthMm: number;         // always stored in mm, even if user entered inches
+  heightMm: number;        // always stored in mm
+  marginMm: number;        // non-printable margin / safe zone, default 1mm
+  dpi: number;
+  elements: LabelElement[];
+  createdBy: string;
+  createdAt: string;
+}
+
+// Common label size presets (widthMm × heightMm)
+export const LABEL_PRESETS = [
+  { name: '2" × 1" (standard)',     widthMm: 50.8,  heightMm: 25.4  },
+  { name: '1.5" × 0.75" (small)',   widthMm: 38.1,  heightMm: 19.05 },
+  { name: '3" × 2" (large)',        widthMm: 76.2,  heightMm: 50.8  },
+  { name: '1" × 1" (square small)', widthMm: 25.4,  heightMm: 25.4  },
+  { name: '2" × 2" (square)',       widthMm: 50.8,  heightMm: 50.8  },
+  { name: '4" × 2" (wide)',         widthMm: 101.6, heightMm: 50.8  },
+  { name: '4" × 3" (extra large)',  widthMm: 101.6, heightMm: 76.2  },
+  { name: 'Custom',                 widthMm: 0,     heightMm: 0     },
+] as const;
+
+// Unit conversion helpers
+export function mmToInches(mm: number): number {
+  return Math.round((mm / 25.4) * 1000) / 1000; // 3 decimal places
+}
+
+export function inchesToMm(inches: number): number {
+  return Math.round(inches * 25.4 * 100) / 100; // 2 decimal places
+}
+```
+
+### Step 4.2 — Designer Canvas (react-konva)
+
+`DesignerCanvas.tsx`:
+- Stage sized to label dimensions × display scale (3px per mm)
+- White background rectangle = label surface with thin gray border
+- **Margin safe zone:** Draw a dashed inner rectangle inset by `marginMm` (default 1mm) from all edges. This represents the printable area. Elements outside this zone risk being clipped by the printer.
+- Each element rendered at mm position × scale
+- **Draggable elements:** update x_mm/y_mm on drag end
+- **Boundary warning:** If any part of an element extends beyond the margin safe zone, highlight that element with a red dashed border and show a small ⚠ icon on it. This is a WARNING, not a block — users may intentionally position elements near edges.
+- Click to select (blue border/handles), Konva Transformer for resize
+- **Keyboard nudging:**
+  - Arrow keys: nudge selected element by 0.25mm
+  - Shift + Arrow keys: nudge by 1mm
+  - These are fine movements critical for aligning barcode/text to not print outside physical label edges
+- Delete key removes selected element (with confirmation)
+- Ctrl/Cmd+D duplicates selected element
+- Optional snap-to-grid toggle:
+  - When ON: positions snap to 0.5mm grid (finer than 1mm for precision alignment)
+  - Show faint grid lines
+- Zoom controls: 50%, 75%, 100%, 150%, 200%
+
+**Unit toggle (mm / inches):**
+- A toggle in the toolbar: "mm" | "in"
+- When set to inches, ALL position/dimension displays convert from mm to inches (3 decimal places)
+- When user types a value in inches, it converts to mm for storage
+- The toggle affects: properties panel coordinate inputs, canvas ruler markings (if shown), element tooltips
+- Internal storage is ALWAYS mm — the toggle is purely a display preference
+- Persist the user's unit preference in localStorage (or in the template object)
+
+Element rendering (same as before):
+- **DataMatrix:** Gray dotted-border square placeholder with "DataMatrix" text and approximate size
+- **HRI Text:** Placeholder text. 3 lines for lot mode, 4 for serial mode.
+- **Static Text:** Literal text content
+- **Line/Rectangle:** Konva Line/Rect shapes
+
+### Step 4.3 — Element Toolbar
+
+Buttons: Add DataMatrix (max 1), Add HRI Text (max 1, warning if missing), Add Text, Add Line, Add Rectangle, Toggle Grid (0.5mm), Zoom, Undo/Redo (50-state stack), **Unit Toggle (mm/in)**
+
+**HRI compliance warning:** If no HRI text element exists in the template, show persistent yellow banner: "⚠ FDA UDI and EU MDR require human-readable interpretation (HRI) text on the label."
+
+### Step 4.4 — Element Properties Panel
+
+Right sidebar when element selected. ALL coordinate and dimension values display in the currently selected unit (mm or inches). User can type values in the displayed unit — they convert to mm for storage.
+
+For ALL elements:
+- Position: X, Y — number inputs with step 0.25mm (or 0.01in)
+- Rotation: dropdown (0°, 90°, 180°, 270°)
+- Lock toggle
+- Delete button (with confirmation)
+- **Boundary indicator:** show "⚠ Outside print area" in orange if element exceeds margin zone
+
+For DataMatrix:
+- Module Size: number input (1–10, default 4)
+- Estimated print size display (calculated from module size and expected data length)
+
+For HRI Text:
+- Font size: number input (4–24 pt)
+- Font: dropdown of ZPL built-in fonts (0, A, B, C, D, E, F, G, H) with a preview name for each
+- Line spacing: number input (mm or inches based on toggle)
+
+For Static Text:
+- Text content: text input (multi-line textarea)
+- Font size, Font, Bold toggle
+
+For Line:
+- End X, End Y (in current unit)
+- Thickness: number input (1–10 dots)
+
+For Rectangle:
+- Width, Height (in current unit)
+- Border thickness: number input (1–10 dots)
+- Filled toggle
+
+All property changes update canvas in real time.
+
+### Step 4.5 — Template Manager & API
+
+**API routes** (`server/src/routes/templates.routes.ts`):
+
+All operations use `templateStore` (JsonStore):
+- `GET /api/templates` — read all from templates.json, filter `isCurrent === true`
+- `GET /api/templates/:id` — find by id
+- `POST /api/templates` — append new template with generated id, templateGroupId, version=1, isCurrent=true
+- `PUT /api/templates/:id` — versioned update:
+  1. Read all templates
+  2. Find current template, get its templateGroupId
+  3. Set old version's isCurrent=false
+  4. Create new record with same templateGroupId, version+1, isCurrent=true
+  5. Write all templates back
+  6. Log to audit
+- `POST /api/templates/:id/duplicate` — copy with new id and templateGroupId
+- `DELETE /api/templates/:id` — remove from array (admin only). Prevent if print jobs reference it.
+- `GET /api/templates/:id/versions` — filter all templates by templateGroupId, sorted by version desc
+
+**Template Manager UI:**
+- New, Save (creates version), Save As, Load, Duplicate, Delete (admin), Version History
+- **Export Template, Import Template, Export All Templates** (see Step 4.6)
+
+**New Template dialog:**
+- Template name and description fields
+- **Unit selector:** mm or inches (affects all dimension inputs in this dialog)
+- **Label size preset dropdown:** shows `LABEL_PRESETS` list (e.g., "2" × 1" (standard)", "1" × 1" (square small)", "Custom")
+  - Selecting a preset auto-fills width and height
+  - Selecting "Custom" enables manual width and height entry
+- **Width and Height inputs:** shown in the selected unit. If user types 2 × 1 in inches, stored as 50.8 × 25.4 mm.
+  - Label can be any rectangle or square — no shape restrictions
+  - Minimum size: 10mm × 10mm (or 0.4" × 0.4")
+  - Maximum size: 152.4mm × 152.4mm (6" × 6") — GK420D max width is ~104mm but labels can be longer
+- **Margin (safe zone):** number input, default 1mm (0.04in). This is how far from the edge the dashed "printable area" border is drawn.
+- **DPI:** dropdown (203, 300, 600) — default 203 for GK420D
+
+**Default starter templates** — seed on first run if templates.json is empty:
+1. "Standard 2×1 inch" (50.8×25.4mm) — DataMatrix + HRI text
+2. "Small 1.5×0.75 inch" (38.1×19.05mm) — DataMatrix + HRI text
+3. "Large 3×2 inch" (76.2×50.8mm) — DataMatrix + HRI + static text placeholder
+
+### Step 4.6 — Integration with Label Form
+
+On the label creator page, add a template selector dropdown. When selected, show a composite preview: template layout + actual label data. The HRI text in this preview shows the actual encoded data (not placeholders), adapting line count to lot vs serial mode.
+
+### Step 4.7 — Test Phase 4
+
+Verify:
+1. Create template, add DataMatrix + HRI text + static text — all render on canvas
+2. Drag to reposition, properties panel shows mm coordinates
+3. Save → appears in template list. Edit and save → version 2 created.
+4. HRI text placeholder shows 3 lines when label form is in lot mode
+5. HRI text placeholder shows 4 lines when label form is in serial mode
+6. Remove HRI text → compliance warning appears
+7. Default starter templates load correctly on first run
+8. On label creator page, select template → composite preview shows template + data
+
+---
+
+## PHASE 5: ZPL GENERATION
+
+### Step 5.1 — ZPL Service
+
+`server/src/services/zpl.service.ts`:
+
+```typescript
+/**
+ * Converts mm to dots: dots = mm × (dpi / 25.4), rounded
+ */
+function mmToDots(mm: number, dpi: number): number {
+  return Math.round(mm * (dpi / 25.4));
+}
+
+/**
+ * Font size (points) to ZPL dots: fontHeightDots = fontSize * dpi / 72
+ */
+function fontSizeToDots(fontSize: number, dpi: number): number {
+  return Math.round(fontSize * dpi / 72);
+}
+
+export interface ZplInput {
+  template: {
+    widthMm: number;
+    heightMm: number;
+    dpi: number;
+    elements: LabelElement[];
+  };
+  data: {
+    gtin: string;
+    identifierMode: 'lot' | 'serial';
+    lotNumber?: string;
+    serialNumber?: string;
+    manufacturingDate: string; // ISO date
+    expirationDate?: string;  // ISO date, ONLY present for serial mode
+  };
+}
+
+/**
+ * Generate ZPL II for a single label.
+ *
+ * CRITICAL: For LOT mode, the DataMatrix ^BX must encode:
+ *   (01)GTIN(11)YYMMDD(10)LOT
+ *   (NO AI 17 expiration)
+ *
+ * For SERIAL mode, the DataMatrix ^BX must encode:
+ *   (01)GTIN(17)YYMMDD(11)YYMMDD(21)SERIAL
+ *
+ * ZPL structure:
+ *   ^XA
+ *   ^PW{labelWidthDots}
+ *   ^LL{labelHeightDots}
+ *   ^LH0,0
+ *   ... elements ...
+ *   ^XZ
+ *
+ * DataMatrix element → ^BX:
+ *   ^FO{x},{y}^BXN,{moduleSize},200,,,,~1^FD{gs1String}^FS
+ *   GS separator in ZPL: ~d029
+ *
+ * HRI Text element → multiple ^FD lines in DISPLAY ORDER:
+ *   LOT MODE: 3 text lines: (01) GTIN, (10) LOT, (11) MfgDate
+ *   SERIAL MODE: 4 text lines: (01) GTIN, (21) SERIAL, (11) MfgDate, (17) ExpDate
+ *   ^FO{x},{y}^A{font}N,{h},{w}^FD(01) {gtin}^FS
+ *   ^FO{x},{y+spacing}^A{font}N,{h},{w}^FD(10) {lot}^FS         // lot mode line 2
+ *   ^FO{x},{y+spacing}^A{font}N,{h},{w}^FD(21) {serial}^FS      // serial mode line 2
+ *   ^FO{x},{y+2*spacing}^A{font}N,{h},{w}^FD(11) {mfgDate}^FS   // line 3 (both modes)
+ *   ^FO{x},{y+3*spacing}^A{font}N,{h},{w}^FD(17) {expDate}^FS   // serial mode only, line 4
+ *
+ *   NOTE: HRI display order (identifier after GTIN) differs from the DataMatrix
+ *   encoding order (fixed-length AIs first). This is intentional.
+ *
+ * Static Text → ^FO + ^A + ^FD
+ * Line → ^FO + ^GB (horizontal/vertical)
+ * Rectangle → ^FO + ^GB
+ * Rotation: N=0, R=90, I=180, B=270
+ */
+export function generateZpl(input: ZplInput): string {
+  // Full implementation
+}
+
+/**
+ * Build GS1 element string for ZPL ^BX command.
+ * LOT MODE: no AI 17
+ * SERIAL MODE: includes AI 17
+ * Use ~d029 for GS separator in ZPL.
+ */
+export function buildZplGs1String(data: ZplInput['data']): string {
+  // Implementation
+}
+
+/**
+ * Batch ZPL: generates one ^XA...^XZ per serial, concatenated.
+ * Only applies to serial mode.
+ */
+export function generateBatchZpl(
+  input: ZplInput,
+  serials: string[],
+  copiesPerLabel: number
+): string {
+  // Implementation
+}
+
+/**
+ * Batch ZPL for lot mode: same label repeated N times.
+ */
+export function generateLotBatchZpl(
+  input: ZplInput,
+  copies: number
+): string {
+  // Generate one ZPL block, repeat it 'copies' times
+  // Or use ZPL ^PQ{copies} command to tell printer to print N copies
+}
+```
+
+### Step 5.2 — ZPL Preview API
+
+- `POST /api/zpl/generate` — returns ZPL string
+- `POST /api/zpl/preview-image` — sends ZPL to Labelary API, returns PNG
+- `POST /api/zpl/batch-generate` — returns batch ZPL + metadata
+
+### Step 5.3 — ZPL Preview in Frontend
+
+"Print Preview" button on label creator page. Shows Labelary-rendered PNG in modal. "Download ZPL" button for manual testing.
+
+### Step 5.4 — Unit Tests
+
+Test:
+- Coordinate conversion
+- LOT mode ZPL: verify NO ^FD line contains AI 17, HRI section has 3 text fields
+- SERIAL mode ZPL: verify AI 17 IS present, HRI section has 4 text fields
+- Font size conversion
+- Batch generation: correct serial per label
+- Lot batch: uses ^PQ or repeated blocks
+
+### Step 5.5 — Test Phase 5
+
+1. Generate ZPL for LOT mode label → paste in labelary.com → renders correctly with 3 HRI lines, no expiration
+2. Generate ZPL for SERIAL mode label → paste in labelary.com → renders with 4 HRI lines, expiration present
+3. Scan both DataMatrix barcodes from Labelary → LOT has no expiration data, SERIAL has expiration data
+4. Batch ZPL for 5 serials → 5 separate label blocks
+5. Print preview modal shows correct rendering
+
+---
+
+## IMPORTANT NOTES
+
+- All data storage uses JsonStore — no SQL. Read from / write to `data/templates.json`.
+- LOT vs SERIAL distinction must be correct in ZPL generation — this is the #1 regulatory risk.
+- Test ZPL on labelary.com/viewer.html before declaring it working.
+- GK420D is 203 DPI: 1mm ≈ 8 dots, 1 inch = 203 dots.
+- ZPL GS separator = `~d029` (ASCII 29 encoded for ZPL).

@@ -1,0 +1,755 @@
+# AGENT 1: Foundation, Barcode Engine, and Data Input (Phases 1–3)
+
+You are building a full-stack GS1 DataMatrix UDI Label Management System for medical devices. This system must comply with FDA 21 CFR 801.45 and EU MDR 2017/745 Article 27. You are responsible for Phases 1–3: project foundation, barcode engine, and data input with live preview.
+
+Read this entire prompt before writing any code. Follow the implementation order exactly. Do not skip ahead to later phases.
+
+---
+
+## CRITICAL LABEL FORMAT RULE
+
+This system has TWO label modes with DIFFERENT data fields:
+
+**LOT MODE (Batch/Lot Number):**
+- Encodes: GTIN (01) + Lot Number (10) + Manufacturing Date (11)
+- Does NOT include Expiration Date — neither in the DataMatrix barcode nor in the HRI text
+- HRI line order: GTIN → Lot → Manufacturing Date
+- Example HRI:
+  ```
+  (01) 00850008393006
+  (10) MG96CI-260116
+  (11) 260116
+  ```
+
+**SERIAL MODE (Serial Number):**
+- Encodes: GTIN (01) + Serial Number (21) + Manufacturing Date (11) + Expiration Date (17)
+- INCLUDES Expiration Date in both the DataMatrix barcode and HRI text
+- HRI line order: GTIN → Serial → Manufacturing Date → Expiration Date
+- Example HRI:
+  ```
+  (01) 00850008393006
+  (21) BWIII2026-1234
+  (11) 260218
+  (17) 330218
+  ```
+
+**HRI LINE ORDER is: GTIN first, then the identifier (lot or serial), then date(s).** This order must be consistent in the HRI text display, the preview, and the printed label. The DataMatrix barcode encoding order may differ internally for optimal encoding (fixed-length AIs first), but the PRINTED human-readable text always follows the order above.
+
+This distinction affects EVERY part of the system: form fields shown, GS1 encoding, ZPL generation, and HRI text rendering.
+
+---
+
+## TECH STACK (Do not substitute)
+
+- Frontend: React 18+ with TypeScript, Vite, Tailwind CSS
+- Backend: Node.js with Express and TypeScript
+- Storage: JSON files on disk (NO SQL database — max 6 users)
+- Barcode: bwip-js (gs1datamatrix symbology)
+- Date math: date-fns
+- Validation: Zod (backend), react-hook-form + zod resolver (frontend)
+- Auth: jsonwebtoken, bcryptjs, HTTP-only cookies
+- Concurrency-safe file I/O: proper-lockfile (npm package for file locking)
+
+---
+
+## DATA STORAGE: JSON FILES (NOT A DATABASE)
+
+This application serves a maximum of 6 users. Instead of PostgreSQL/Prisma, use simple JSON files stored in a `/data` directory. Each entity type gets its own file.
+
+### Storage Architecture
+
+```
+/data/
+├── users.json              # User accounts
+├── products.json           # Product profiles
+├── templates.json          # Label templates (all versions)
+├── printers.json           # Configured printers
+├── print-jobs.json         # Print job history
+└── audit-log.json          # Audit trail (append-only)
+```
+
+### JSON Store Service
+
+Create `server/src/services/jsonStore.ts` — a generic, reusable, concurrency-safe JSON file store:
+
+```typescript
+import fs from 'fs/promises';
+import path from 'path';
+import lockfile from 'proper-lockfile';
+
+const DATA_DIR = path.join(process.cwd(), 'data');
+
+/**
+ * Generic JSON file store with file-locking for safe concurrent access.
+ *
+ * Usage:
+ *   const store = new JsonStore<User>('users.json');
+ *   const users = await store.readAll();
+ *   await store.write(updatedUsers);
+ *   await store.append(newUser);          // adds one item
+ *   await store.updateById(id, partial);  // updates one item by id
+ *   await store.deleteById(id);           // removes one item by id
+ */
+export class JsonStore<T extends { id: string }> {
+  private filePath: string;
+
+  constructor(filename: string) {
+    this.filePath = path.join(DATA_DIR, filename);
+  }
+
+  /**
+   * Ensure the data directory and file exist.
+   * Call once at app startup.
+   */
+  async init(): Promise<void> {
+    await fs.mkdir(DATA_DIR, { recursive: true });
+    try {
+      await fs.access(this.filePath);
+    } catch {
+      await fs.writeFile(this.filePath, '[]', 'utf-8');
+    }
+  }
+
+  /**
+   * Read all records. Uses file lock to prevent reading during writes.
+   */
+  async readAll(): Promise<T[]> {
+    const release = await lockfile.lock(this.filePath, { retries: 5 });
+    try {
+      const raw = await fs.readFile(this.filePath, 'utf-8');
+      return JSON.parse(raw) as T[];
+    } finally {
+      await release();
+    }
+  }
+
+  /**
+   * Overwrite the entire file with new data.
+   */
+  async write(data: T[]): Promise<void> {
+    const release = await lockfile.lock(this.filePath, { retries: 5 });
+    try {
+      await fs.writeFile(this.filePath, JSON.stringify(data, null, 2), 'utf-8');
+    } finally {
+      await release();
+    }
+  }
+
+  /**
+   * Append a single record.
+   */
+  async append(item: T): Promise<void> {
+    const all = await this.readAll();
+    all.push(item);
+    await this.write(all);
+  }
+
+  /**
+   * Find by ID.
+   */
+  async findById(id: string): Promise<T | undefined> {
+    const all = await this.readAll();
+    return all.find(item => item.id === id);
+  }
+
+  /**
+   * Update a record by ID (partial update).
+   */
+  async updateById(id: string, partial: Partial<T>): Promise<T | null> {
+    const all = await this.readAll();
+    const index = all.findIndex(item => item.id === id);
+    if (index === -1) return null;
+    all[index] = { ...all[index], ...partial, id }; // preserve ID
+    await this.write(all);
+    return all[index];
+  }
+
+  /**
+   * Delete a record by ID.
+   */
+  async deleteById(id: string): Promise<boolean> {
+    const all = await this.readAll();
+    const filtered = all.filter(item => item.id !== id);
+    if (filtered.length === all.length) return false;
+    await this.write(filtered);
+    return true;
+  }
+}
+```
+
+### Data Schemas (JSON structure for each file)
+
+**users.json:**
+```json
+[
+  {
+    "id": "uuid",
+    "username": "admin",
+    "email": "admin@system.local",
+    "passwordHash": "$2b$12$...",
+    "role": "admin",
+    "isActive": true,
+    "createdAt": "2026-02-18T00:00:00Z",
+    "updatedAt": "2026-02-18T00:00:00Z"
+  }
+]
+```
+
+**products.json:**
+```json
+[
+  {
+    "id": "uuid",
+    "name": "CardioSensor Model X",
+    "gtin": "00850008393006",
+    "description": "Cardiac monitoring sensor",
+    "identifierMode": "lot",
+    "shelfLifeYears": 7,
+    "shelfLifeMonths": 0,
+    "shelfLifeDays": 0,
+    "autoExpirationEnabled": false,
+    "createdBy": "user-uuid",
+    "createdAt": "2026-02-18T00:00:00Z",
+    "updatedAt": "2026-02-18T00:00:00Z"
+  }
+]
+```
+
+**templates.json:**
+```json
+[
+  {
+    "id": "uuid",
+    "templateGroupId": "uuid",
+    "version": 1,
+    "isCurrent": true,
+    "name": "Standard 2x1 inch",
+    "description": "Default medical device label",
+    "widthMm": 50.8,
+    "heightMm": 25.4,
+    "dpi": 203,
+    "elements": [],
+    "createdBy": "user-uuid",
+    "createdAt": "2026-02-18T00:00:00Z"
+  }
+]
+```
+
+**printers.json:**
+```json
+[
+  {
+    "id": "uuid",
+    "name": "Lab Zebra GK420D",
+    "connectionType": "zebra_browser_print",
+    "ipAddress": null,
+    "port": 9100,
+    "printerModel": "Zebra GK420D",
+    "dpi": 203,
+    "driver": "zebra_zpl",
+    "isDefault": true,
+    "createdBy": "user-uuid",
+    "createdAt": "2026-02-18T00:00:00Z",
+    "updatedAt": "2026-02-18T00:00:00Z"
+  }
+]
+```
+
+**print-jobs.json:**
+```json
+[
+  {
+    "id": "uuid",
+    "userId": "user-uuid",
+    "templateId": "template-uuid",
+    "printerId": "printer-uuid",
+    "productId": "product-uuid",
+    "identifierMode": "lot",
+    "gtin": "00850008393006",
+    "lotNumber": "MG96CI-260116",
+    "serialPatternJson": null,
+    "manufacturingDate": "2026-01-16",
+    "expirationDate": null,
+    "totalLabels": 50,
+    "copiesPerLabel": 1,
+    "status": "completed",
+    "labelsPrinted": 50,
+    "errorMessage": null,
+    "createdAt": "2026-02-18T10:30:00Z",
+    "completedAt": "2026-02-18T10:31:15Z"
+  }
+]
+```
+
+**audit-log.json:**
+```json
+[
+  {
+    "id": "auto-increment-number",
+    "timestamp": "2026-02-18T10:30:00Z",
+    "userId": "user-uuid",
+    "actionType": "user.login",
+    "entityType": "user",
+    "entityId": "user-uuid",
+    "details": {},
+    "ipAddress": "192.168.1.10"
+  }
+]
+```
+
+The audit-log store must be APPEND-ONLY. Create a specialized `AuditLogStore` class that extends `JsonStore` but removes the `updateById`, `deleteById`, and `write` (overwrite) methods. Only `append` and `readAll` are allowed.
+
+### Initialization
+
+On server startup, call `.init()` on all stores and seed the default admin user if `users.json` is empty.
+
+---
+
+## PROJECT STRUCTURE
+
+```
+/
+├── client/
+│   ├── src/
+│   │   ├── components/
+│   │   │   ├── Auth/
+│   │   │   │   ├── LoginPage.tsx
+│   │   │   │   └── UserManagement.tsx
+│   │   │   ├── LabelForm/
+│   │   │   │   ├── LabelDataForm.tsx
+│   │   │   │   ├── GtinInput.tsx
+│   │   │   │   ├── IdentifierToggle.tsx
+│   │   │   │   ├── DateInputs.tsx
+│   │   │   │   └── ExpirationCalculator.tsx
+│   │   │   ├── LabelPreview/
+│   │   │   │   ├── DataMatrixPreview.tsx
+│   │   │   │   └── HriTextPreview.tsx
+│   │   │   ├── ProductManager/
+│   │   │   │   ├── ProductList.tsx
+│   │   │   │   └── ProductForm.tsx
+│   │   │   └── Layout/
+│   │   │       ├── AppShell.tsx
+│   │   │       ├── Sidebar.tsx
+│   │   │       └── ProtectedRoute.tsx
+│   │   ├── services/
+│   │   │   ├── api.ts
+│   │   │   └── barcodePreview.ts
+│   │   ├── hooks/
+│   │   │   ├── useAuth.ts
+│   │   │   └── useProducts.ts
+│   │   ├── types/
+│   │   │   ├── gs1.types.ts
+│   │   │   ├── auth.types.ts
+│   │   │   └── product.types.ts
+│   │   ├── utils/
+│   │   │   ├── gtinValidator.ts
+│   │   │   ├── gs1Encoder.ts
+│   │   │   └── serialGenerator.ts
+│   │   ├── App.tsx
+│   │   └── main.tsx
+│   ├── index.html
+│   ├── tailwind.config.js
+│   ├── tsconfig.json
+│   ├── vite.config.ts
+│   └── package.json
+├── server/
+│   ├── src/
+│   │   ├── routes/
+│   │   │   ├── auth.routes.ts
+│   │   │   ├── products.routes.ts
+│   │   │   └── barcode.routes.ts
+│   │   ├── controllers/
+│   │   │   ├── auth.controller.ts
+│   │   │   └── products.controller.ts
+│   │   ├── services/
+│   │   │   ├── jsonStore.ts
+│   │   │   ├── auditLogStore.ts
+│   │   │   ├── barcode.service.ts
+│   │   │   └── audit.service.ts
+│   │   ├── middleware/
+│   │   │   ├── auth.middleware.ts
+│   │   │   ├── rbac.middleware.ts
+│   │   │   └── validation.middleware.ts
+│   │   ├── stores/
+│   │   │   └── index.ts           # Instantiate all stores, export them
+│   │   └── app.ts
+│   ├── tsconfig.json
+│   └── package.json
+├── data/                          # Created at runtime, gitignored except for .gitkeep
+│   └── .gitkeep
+├── .env.example
+├── .gitignore
+└── README.md
+```
+
+---
+
+## PHASE 1: PROJECT FOUNDATION
+
+### Step 1.1 — Initialize the monorepo
+
+Create `package.json` at root with scripts to run both client and server concurrently.
+
+Initialize the client:
+```bash
+cd client
+npm create vite@latest . -- --template react-ts
+npm install tailwindcss @tailwindcss/vite react-router-dom react-hook-form @hookform/resolvers zod axios date-fns bwip-js
+npm install -D @types/bwip-js
+```
+
+Initialize the server:
+```bash
+cd server
+npm init -y
+npm install express cors helmet cookie-parser jsonwebtoken bcryptjs zod dotenv uuid proper-lockfile
+npm install -D typescript @types/express @types/cors @types/cookie-parser @types/jsonwebtoken @types/bcryptjs @types/uuid @types/proper-lockfile @types/node ts-node tsx nodemon
+```
+
+Configure TypeScript for both. Configure Tailwind CSS with Vite plugin. Configure Vite to proxy `/api` requests to `http://localhost:3001`.
+
+### Step 1.2 — JSON Store Implementation
+
+Implement `server/src/services/jsonStore.ts` as specified above (the full `JsonStore<T>` class).
+
+Implement `server/src/services/auditLogStore.ts`:
+```typescript
+/**
+ * Append-only audit log store.
+ * Extends JsonStore but REMOVES write-overwrite, updateById, and deleteById methods.
+ * The only mutation allowed is append.
+ * IDs are auto-incrementing integers (read current max + 1).
+ */
+```
+
+Implement `server/src/stores/index.ts`:
+```typescript
+// Instantiate and export all stores:
+export const userStore = new JsonStore<User>('users.json');
+export const productStore = new JsonStore<Product>('products.json');
+export const templateStore = new JsonStore<LabelTemplate>('templates.json');
+export const printerStore = new JsonStore<Printer>('printers.json');
+export const printJobStore = new JsonStore<PrintJob>('print-jobs.json');
+export const auditLogStore = new AuditLogStore('audit-log.json');
+
+// Initialize all stores (call at app startup):
+export async function initializeStores(): Promise<void> {
+  await userStore.init();
+  await productStore.init();
+  await templateStore.init();
+  await printerStore.init();
+  await printJobStore.init();
+  await auditLogStore.init();
+  await seedDefaultAdmin(); // creates admin user if users.json is empty
+}
+```
+
+### Step 1.3 — Seed Default Admin
+
+In `initializeStores()`, after initializing all stores, check if `users.json` is empty. If so, create:
+- Username: `admin`
+- Email: `admin@system.local`
+- Password: `ChangeMe123!` (bcrypt hashed, cost 12)
+- Role: `admin`
+- isActive: true
+
+### Step 1.4 — Authentication System
+
+**Backend:**
+
+`server/src/middleware/auth.middleware.ts`:
+- Extract JWT from HTTP-only cookie named `auth_token`
+- Verify with jsonwebtoken
+- Attach `req.user = { id, username, role }` to request
+- Return 401 if missing/invalid
+
+`server/src/middleware/rbac.middleware.ts`:
+- `requireRole(...roles)` factory that checks `req.user.role`
+- Return 403 if unauthorized
+
+`server/src/routes/auth.routes.ts`:
+- `POST /api/auth/login` — validate against `userStore`, issue JWT in HTTP-only cookie
+- `POST /api/auth/logout` — clear cookie
+- `GET /api/auth/me` — return current user from JWT
+- `POST /api/auth/users` — admin only: create new user (max 6 — reject if 6 already exist)
+- `GET /api/auth/users` — admin only: list all users
+- `PATCH /api/auth/users/:id` — admin only: update role, deactivate, reset password
+- All mutations log to audit trail
+
+**Frontend:**
+
+`client/src/hooks/useAuth.ts`:
+- React context: `user`, `login()`, `logout()`, `isAuthenticated`, `isAdmin`
+- On mount, call `GET /api/auth/me` to restore session
+
+`client/src/components/Auth/LoginPage.tsx`:
+- Username/password form, error display, redirect on success
+
+`client/src/components/Layout/ProtectedRoute.tsx`:
+- Wraps authenticated routes, optional `requiredRole` prop
+
+`client/src/components/Layout/AppShell.tsx`:
+- Sidebar nav: Dashboard, Label Creator, Products, Print History
+- Admin section: Users, Printers, Audit Log
+- Top bar: username, logout
+
+`client/src/components/Auth/UserManagement.tsx`:
+- User table: username, email, role, status, created
+- Add user modal (enforce max 6 users — show message if limit reached)
+- Edit role, reset password, deactivate actions
+
+`client/src/services/api.ts`:
+- Axios instance, `baseURL: '/api'`, `withCredentials: true`
+- 401 interceptor → redirect to login
+
+### Step 1.5 — .env and .gitignore
+
+`.env.example`:
+```
+JWT_SECRET=change-this-to-a-random-64-char-string
+JWT_EXPIRY=30m
+PORT=3001
+NODE_ENV=development
+```
+
+`.gitignore`:
+```
+node_modules/
+dist/
+data/*.json
+!data/.gitkeep
+.env
+```
+
+### Step 1.6 — Test Phase 1
+
+Verify:
+1. `npm run dev` starts both client and server
+2. `/data` directory is created with empty JSON files
+3. Default admin user is seeded in users.json
+4. Login with admin/ChangeMe123! works
+5. GET /api/auth/me returns user
+6. Create operator user works (and is saved in users.json)
+7. Try creating 7th user → rejected with "Maximum 6 users reached"
+8. Protected routes redirect to login
+9. Admin routes return 403 for operators
+10. Audit log has entries for login and user creation in audit-log.json
+
+---
+
+## PHASE 2: BARCODE ENGINE & GS1 ENCODING
+
+### Step 2.1 — GTIN-14 Validator
+
+`client/src/utils/gtinValidator.ts`:
+
+```typescript
+/**
+ * Validates a GTIN-14 check digit using GS1 modulo-10 algorithm.
+ * 1. Take first 13 digits
+ * 2. From rightmost of those 13, assign alternating weights 3 and 1
+ * 3. Multiply each digit by its weight and sum
+ * 4. Check digit = (10 - (sum % 10)) % 10
+ * 5. Compare with 14th digit
+ */
+export function validateGtin14(gtin: string): { valid: boolean; error?: string } {
+  // Full implementation — return specific error messages
+}
+export function computeGtinCheckDigit(first13: string): number {
+  // Implementation
+}
+```
+
+### Step 2.2 — GS1 Element String Encoder
+
+`client/src/utils/gs1Encoder.ts`:
+
+```typescript
+export interface GS1LabelData {
+  gtin: string;
+  identifierMode: 'lot' | 'serial';
+  lotNumber?: string;
+  serialNumber?: string;
+  manufacturingDate: Date;
+  expirationDate?: Date;  // ONLY present in serial mode
+}
+
+/**
+ * Builds the GS1 element string for bwip-js gs1datamatrix encoding.
+ *
+ * IMPORTANT: The DataMatrix ENCODING order and the HRI DISPLAY order are DIFFERENT.
+ *
+ * ENCODING ORDER (optimized for DataMatrix — fixed-length AIs first):
+ *   LOT MODE:    "(01)GTIN(11)YYMMDD(10)LOTVALUE"
+ *   SERIAL MODE: "(01)GTIN(17)YYMMDD(11)YYMMDD(21)SERIALVALUE"
+ *   Variable-length field (10 or 21) is LAST so no GS separator is needed.
+ *
+ * HRI DISPLAY ORDER (human-readable text on the label — identifier after GTIN):
+ *   LOT MODE:    (01) → (10) → (11)
+ *   SERIAL MODE: (01) → (21) → (11) → (17)
+ *   See buildHriText() for this order.
+ *
+ * bwip-js handles FNC1 automatically for gs1datamatrix — do NOT add manually.
+ */
+export function buildGS1ElementString(data: GS1LabelData): string {
+  // Implementation — use ENCODING order (fixed-length first, variable last)
+}
+
+/**
+ * Formats Date to YYMMDD for GS1 date AIs.
+ */
+export function formatGS1Date(date: Date): string {
+  // Implementation
+}
+
+/**
+ * Builds HRI text lines in the correct DISPLAY order.
+ *
+ * HRI order is: GTIN → Identifier (lot or serial) → Date(s)
+ * This matches the physical label layout the customer uses.
+ *
+ * LOT MODE — 3 lines:
+ *   ["(01) 00850008393006", "(10) MG96CI-260116", "(11) 260116"]
+ *
+ * SERIAL MODE — 4 lines:
+ *   ["(01) 00850008393006", "(21) BWIII2026-1234", "(11) 260218", "(17) 330218"]
+ *
+ * NOTE: HRI dates use YYMMDD format (matching the GS1 encoding), NOT ISO format.
+ * NOTE: The HRI order differs from the DataMatrix encoding order. The encoding
+ *       puts fixed-length AIs first for optimal barcode size. The HRI puts the
+ *       identifier right after GTIN for human readability.
+ */
+export function buildHriText(data: GS1LabelData): string[] {
+  // Implementation — use DISPLAY order (GTIN, identifier, dates)
+}
+```
+
+### Step 2.3 — Serial Number Generator
+
+`client/src/utils/serialGenerator.ts`:
+
+```typescript
+export interface SerialPattern {
+  prefix: string;
+  suffix: string;
+  start: number;
+  end: number;
+  step: number;
+  padWidth: number;
+}
+
+export function generateSerials(pattern: SerialPattern): string[] { /* ... */ }
+export function countSerials(pattern: SerialPattern): number { /* ... */ }
+export function suggestPadWidth(end: number): number { /* ... */ }
+```
+
+### Step 2.4 — Server-side Barcode Service
+
+`server/src/services/barcode.service.ts`:
+- `generateDataMatrixPng(gs1ElementString, moduleSize)` using bwip-js `gs1datamatrix`
+- Route: `POST /api/barcode/preview` — returns PNG
+
+### Step 2.5 — Unit Tests
+
+Test GTIN validator, GS1 encoder (both lot and serial modes), date formatting, serial generator.
+
+Critical test: Lot mode encoding must NOT contain AI (17). Serial mode encoding MUST contain AI (17).
+
+HRI order tests:
+- Lot mode `buildHriText()` → returns `["(01) ...", "(10) ...", "(11) ..."]` — identifier BEFORE date
+- Serial mode `buildHriText()` → returns `["(01) ...", "(21) ...", "(11) ...", "(17) ..."]` — identifier BEFORE dates
+- Verify: HRI line 2 is always the identifier (lot or serial), NOT a date
+
+### Step 2.6 — Test Phase 2
+
+Verify:
+1. All unit tests pass
+2. POST /api/barcode/preview with lot mode data returns PNG without expiration encoded
+3. POST /api/barcode/preview with serial mode data returns PNG with expiration encoded
+4. Scan both PNGs with a phone scanner — verify correct data
+
+---
+
+## PHASE 3: LABEL DATA INPUT & PREVIEW UI
+
+### Step 3.1 — Label Data Form
+
+`client/src/components/LabelForm/LabelDataForm.tsx`:
+
+Two-column layout: form on left, live preview on right.
+
+**IdentifierToggle.tsx:**
+- "Lot Number" / "Serial Number" segmented control
+- **When LOT is selected:**
+  - Show Lot Number input field
+  - Hide Serial Number field
+  - Hide Expiration Date field entirely (lot labels have no expiration)
+  - Hide auto-expiration calculator
+- **When SERIAL is selected:**
+  - Show Serial Number input field
+  - Hide Lot Number field
+  - Show Expiration Date field
+  - Show auto-expiration calculator toggle
+
+**GtinInput.tsx:**
+- 14-digit input, real-time validation, checkmark/X indicator
+
+**DateInputs.tsx:**
+- Manufacturing Date: date picker, defaults to today
+- Expiration Date: ONLY visible in serial mode. If auto-calc enabled, read-only with "Override" button.
+
+**ExpirationCalculator.tsx:**
+- ONLY visible in serial mode
+- Toggle to enable, years/months/days inputs
+- Auto-calculates expiration from manufacturing date + interval
+
+### Step 3.2 — Live Preview
+
+**DataMatrixPreview.tsx:**
+- bwip-js client-side canvas rendering, debounced 300ms
+- Placeholder when data incomplete
+
+**HriTextPreview.tsx:**
+- Renders HRI text below barcode
+- **LOT mode shows 3 lines:** (01), (10), (11) — NO expiration
+- **SERIAL mode shows 4 lines:** (01), (17), (11), (21) — WITH expiration
+- Monospace font, matches the format in the reference image provided
+
+### Step 3.3 — Product Profiles
+
+API routes for CRUD on `productStore`. Frontend list and form components.
+
+When loading a lot-mode product, the expiration fields remain hidden. When loading a serial-mode product, the expiration fields appear with the saved interval.
+
+### Step 3.4 — Routing
+
+```
+/login          → LoginPage
+/               → redirect to /labels
+/labels         → LabelDataForm
+/products       → ProductList
+/admin/users    → UserManagement (admin only)
+```
+
+### Step 3.5 — Test Phase 3
+
+Verify:
+1. Toggle to LOT mode → expiration date field disappears, lot number field appears
+2. Toggle to SERIAL mode → expiration date field appears, serial number field appears
+3. LOT mode: enter GTIN + lot + manufacturing date → preview shows DataMatrix + 3 HRI lines in order: (01), (10), (11) — no expiration
+4. SERIAL mode: enter GTIN + serial + dates → preview shows DataMatrix + 4 HRI lines in order: (01), (21), (11), (17) — with expiration
+5. Auto-expiration: manufacturing 2026-02-18, interval 7 years → expiration auto-fills 2033-02-18
+6. Edge case: manufacturing 2026-01-31 + 1 month → expiration 2026-02-28
+7. Save a LOT-mode product → reload → select it → lot mode activates, no expiration fields
+8. Save a SERIAL-mode product → reload → select it → serial mode activates, expiration fields show
+9. Scan preview DataMatrix with phone → LOT mode barcode has no expiration data, SERIAL mode has expiration data
+
+---
+
+## IMPORTANT NOTES
+
+- Do NOT implement template designer, ZPL generation, printer module, or batch printing. Those are Phase 4+.
+- The LOT vs SERIAL distinction is the most critical business rule — double-check it in every component.
+- JSON files in /data should be gitignored (except .gitkeep).
+- Max 6 users — enforce in the create user endpoint.
+- When in doubt about label format, refer to the reference image: LOT mode with GTIN 00850008393006, lot MG96CI-260116, manufacturing date 260116, NO expiration date.

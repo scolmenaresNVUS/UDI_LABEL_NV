@@ -1,0 +1,570 @@
+# AGENT 5 — QA: Backend, Data Integrity, GS1 Encoding & Print Pipeline
+
+You are a QA engineer focused on backend correctness, data integrity, GS1 compliance, and the print pipeline. Your primary concern is that the system produces ACCURATE, SCANNABLE, REGULATORY-COMPLIANT labels.
+
+Your job: test every API endpoint, verify GS1 encoding correctness, validate ZPL output, check data integrity in JSON files, and stress-test the system. Produce a structured bug report.
+
+Read the full codebase before starting. Run the application. You will use a combination of: direct API calls (curl or Postman/Insomnia), reading JSON data files, inspecting generated ZPL, and testing barcodes on labelary.com.
+
+---
+
+## THE #1 RULE TO VERIFY
+
+**LOT MODE: DataMatrix encodes (01)(11)(10) — NO AI 17 expiration. ZPL generates 3 HRI lines.**
+**SERIAL MODE: DataMatrix encodes (01)(17)(11)(21) — WITH AI 17 expiration. ZPL generates 4 HRI lines.**
+
+Every test involving GS1 encoding or ZPL output MUST verify this rule.
+
+---
+
+## TEST SUITE 1: GS1 ENCODING ACCURACY
+
+### T1.1 — Element String Encoding (Unit Test Level)
+
+Run or write tests for `gs1Encoder.ts`:
+
+**LOT MODE test cases:**
+```
+Input: gtin="00850008393006", mode=lot, lot="MG96CI-260116", mfgDate=2026-01-16
+Expected string: "(01)00850008393006(11)260116(10)MG96CI-260116"
+Verify: NO "(17)" appears anywhere in the string
+```
+
+```
+Input: gtin="00850025507338", mode=lot, lot="LOT-A1", mfgDate=2026-12-31
+Expected string: "(01)00850025507338(11)261231(10)LOT-A1"
+Verify: NO "(17)" anywhere
+```
+
+**SERIAL MODE test cases:**
+```
+Input: gtin="00850008393006", mode=serial, serial="ABC0001", mfgDate=2026-02-18, expDate=2033-02-18
+Expected string: "(01)00850008393006(17)330218(11)260218(21)ABC0001"
+Verify: "(17)330218" IS present
+```
+
+```
+Input: gtin="00850025507338", mode=serial, serial="SN-999", mfgDate=2025-06-15, expDate=2032-06-15
+Expected string: "(01)00850025507338(17)320615(11)250615(21)SN-999"
+Verify: "(17)320615" IS present
+```
+
+- [ ] ALL lot mode tests produce strings WITHOUT AI 17
+- [ ] ALL serial mode tests produce strings WITH AI 17
+- [ ] Variable-length field (10 or 21) is LAST in the string (no trailing GS separator needed)
+- [ ] Fixed-length fields have no GS separators between them
+
+### T1.2 — Date Formatting
+- [ ] 2026-02-18 → "260218"
+- [ ] 2033-12-01 → "331201"
+- [ ] 2025-01-01 → "250101"
+- [ ] 2029-06-30 → "290630"
+- [ ] Year 2000 → "000101" (edge case — unlikely but verify)
+
+### T1.3 — GTIN Validation
+- [ ] "00850008393006" → valid (check digit 6 is correct)
+- [ ] "00850008393007" → invalid (expected 6)
+- [ ] "12345678901231" → valid (check digit 1 is correct for this GTIN)
+- [ ] "00000000000000" → valid (check digit 0)
+- [ ] "123" → invalid (too short)
+- [ ] "abcdefghijklmn" → invalid (non-numeric)
+
+### T1.4 — HRI Text Generation (LINE ORDER IS CRITICAL)
+
+**LOT MODE HRI:**
+- [ ] Returns exactly 3 strings
+- [ ] Line 1 = "(01) 00850008393006" (GTIN)
+- [ ] Line 2 = "(10) MG96CI-260116" (Lot — the IDENTIFIER, not a date)
+- [ ] Line 3 = "(11) 260116" (Manufacturing date)
+- [ ] No string contains "(17)"
+- [ ] **Order check:** line 2 is ALWAYS the identifier (10), line 3 is ALWAYS the date (11)
+
+**SERIAL MODE HRI:**
+- [ ] Returns exactly 4 strings
+- [ ] Line 1 = "(01) 00850008393006" (GTIN)
+- [ ] Line 2 = "(21) BWIII2026-1234" (Serial — the IDENTIFIER, not a date)
+- [ ] Line 3 = "(11) 260218" (Manufacturing date)
+- [ ] Line 4 = "(17) 330218" (Expiration date)
+- [ ] **Order check:** line 2 is ALWAYS the identifier (21), lines 3-4 are ALWAYS dates
+
+**Encoding order vs display order (CRITICAL distinction):**
+- [ ] `buildGS1ElementString()` for LOT → produces `(01)...(11)...(10)...` (fixed AIs first, variable last = ENCODING order)
+- [ ] `buildHriText()` for LOT → produces `(01)..., (10)..., (11)...` (identifier after GTIN = DISPLAY order)
+- [ ] These two orders are INTENTIONALLY DIFFERENT — if they are the same, verify this is correct
+- [ ] `buildGS1ElementString()` for SERIAL → produces `(01)...(17)...(11)...(21)...` (encoding order)
+- [ ] `buildHriText()` for SERIAL → produces `(01)..., (21)..., (11)..., (17)...` (display order)
+- [ ] HRI dates use YYMMDD format
+
+**Serial number format validation:**
+- [ ] Serial "BWIII2026-1234" → accepted (letters, digits, hyphens)
+- [ ] Serial "ABC0001" → accepted
+- [ ] Serial "SN-999" → accepted
+- [ ] Serial with 20 characters → accepted (max length)
+- [ ] Serial with 21 characters → rejected (not YYYY-MM-DD)
+
+### T1.5 — Serial Number Generator
+- [ ] prefix="ABC", start=234, end=298, step=1, pad=0 → 65 items, first="ABC234", last="ABC298"
+- [ ] prefix="", suffix="-X", start=1, end=50, step=1, pad=4 → 50 items, first="0001-X", last="0050-X"
+- [ ] step=5, start=1, end=50 → items=[1,6,11,16,21,26,31,36,41,46] → 10 items
+- [ ] start=1, end=1, step=1 → 1 item
+- [ ] start > end → should return empty or throw error (document which)
+- [ ] step=0 → should throw or return error
+
+---
+
+## TEST SUITE 2: API ENDPOINT TESTING
+
+Use curl, Postman, or write test scripts. Test EVERY endpoint.
+
+### T2.1 — Auth Endpoints
+```bash
+# Login
+curl -X POST http://localhost:3001/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"ChangeMe123!"}' \
+  -c cookies.txt -v
+```
+- [ ] Returns 200 with user object, sets `auth_token` cookie
+- [ ] Cookie is HTTP-only (check Set-Cookie header flags)
+- [ ] Cookie has Secure flag in production mode
+- [ ] Wrong password → 401 with message (not 500)
+- [ ] Missing fields → 400 with validation error
+
+```bash
+# Access protected route without cookie
+curl http://localhost:3001/api/auth/me -v
+```
+- [ ] Returns 401
+
+```bash
+# Access with cookie
+curl http://localhost:3001/api/auth/me -b cookies.txt
+```
+- [ ] Returns user object
+
+```bash
+# Create user (as admin)
+curl -X POST http://localhost:3001/api/auth/users \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{"username":"test","email":"test@test.com","password":"Test1234!","role":"operator"}'
+```
+- [ ] Returns 201, user created in data/users.json
+- [ ] Password is bcrypt hashed in JSON file (NOT plaintext)
+- [ ] Try creating 7th user → 400 or 403 with "max users reached"
+
+### T2.2 — Products CRUD
+- [ ] POST /api/products — creates product, stored in data/products.json
+- [ ] GET /api/products — returns all products
+- [ ] GET /api/products/:id — returns single product
+- [ ] PATCH /api/products/:id — updates product
+- [ ] POST with missing required fields → 400 with Zod validation errors
+- [ ] POST with invalid GTIN → 400 with GTIN validation error
+- [ ] LOT mode product: autoExpirationEnabled should be false (or ignored)
+- [ ] SERIAL mode product: shelf life fields should be populated
+
+### T2.3 — Templates CRUD & Import/Export
+- [ ] POST /api/templates — creates template in data/templates.json with version=1
+- [ ] GET /api/templates — returns only isCurrent=true templates
+- [ ] PUT /api/templates/:id — creates new version, old version isCurrent=false
+- [ ] Verify: after PUT, templates.json has TWO records with same templateGroupId (v1 and v2)
+- [ ] GET /api/templates/:id/versions — returns all versions sorted
+- [ ] POST /api/templates/:id/duplicate — new templateGroupId, version=1
+- [ ] DELETE as operator → 403
+
+**Export tests:**
+- [ ] GET /api/templates/:id/export → returns JSON with formatVersion=1 and complete template data
+- [ ] Exported template includes all elements with correct types and positions
+- [ ] GET /api/templates/export-all → returns JSON with all current templates
+- [ ] Export-all template count matches number of isCurrent=true templates in templates.json
+
+**Import tests:**
+```bash
+# Export a template, then import it
+curl http://localhost:3001/api/templates/{id}/export -b cookies.txt -o exported.json
+
+# Import it back
+curl -X POST http://localhost:3001/api/templates/import \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d @exported.json
+```
+- [ ] Imported template gets new id and templateGroupId (NOT the same as source)
+- [ ] Imported template version = 1
+- [ ] Imported template isCurrent = true
+- [ ] All elements preserved with correct types, positions, and properties
+- [ ] Import with duplicate name → response indicates conflict with existing template name
+- [ ] Import resolve with action="copy" → template saved with " (Imported)" suffix
+- [ ] Import resolve with action="replace" → existing template gets isCurrent=false, import becomes current
+- [ ] Import resolve with action="skip" → no changes to templates.json
+- [ ] Import as operator → 403 (admin only)
+- [ ] Import invalid JSON structure → 400 with specific validation error
+- [ ] Import with missing required fields (e.g., no widthMm) → 400 with Zod error
+- [ ] Import with invalid element type (e.g., type="invalid") → 400
+- [ ] Import with negative dimensions → 400
+- [ ] Import with formatVersion=2 (unsupported) → 400 with "Unsupported format version"
+- [ ] Import request body > 5MB → 413 or 400 with size error
+- [ ] **Round-trip integrity:** export → import → export again → compare: template data is identical
+- [ ] **Bulk import:** import .gslabel-pack with 20 templates → all 20 created in templates.json
+- [ ] Audit log contains entries for all import/export operations
+
+### T2.4 — Print Jobs
+- [ ] POST /api/print-jobs with LOT mode data → created in data/print-jobs.json
+  - Verify: lotNumber is set, serialPatternJson is null, expirationDate is null
+- [ ] POST /api/print-jobs with SERIAL mode data → created
+  - Verify: serialNumber or serialPatternJson is set, expirationDate is NOT null
+- [ ] PATCH /api/print-jobs/:id/status → updates status
+- [ ] GET /api/print-jobs → returns paginated list
+- [ ] GET /api/print-jobs/:id → full details
+
+### T2.5 — Label Export API (PNG/PDF)
+
+**Single label PNG export:**
+```bash
+curl -X POST http://localhost:3001/api/labels/export-png \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{"templateId":"[ID]","data":{"gtin":"00850008393006","identifierMode":"lot","lotNumber":"MG96CI-260116","manufacturingDate":"2026-01-16"}}' \
+  -o label.png
+```
+- [ ] Returns valid PNG file (verify with `file label.png` command → "PNG image data")
+- [ ] Response has `Content-Type: image/png`
+- [ ] Response has `Content-Disposition: attachment; filename=...`
+- [ ] LOT mode PNG: scan → no expiration data encoded
+- [ ] SERIAL mode PNG: scan → expiration data present
+
+**Single label PDF export:**
+```bash
+curl -X POST http://localhost:3001/api/labels/export-pdf \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{"templateId":"[ID]","data":{...lot mode data...}}' \
+  -o label.pdf
+```
+- [ ] Returns valid PDF file (verify with `file label.pdf` → "PDF document")
+- [ ] Response has `Content-Type: application/pdf`
+- [ ] Open PDF: page size matches template dimensions (e.g., 50.8mm × 25.4mm, NOT letter size)
+- [ ] Label content rendered correctly within the page
+- [ ] PDF is not blank or corrupted
+
+**Batch PDF export:**
+```bash
+curl -X POST http://localhost:3001/api/labels/export-batch-pdf \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{"templateId":"[ID]","data":{...serial data...},"serialPattern":{"prefix":"SN","suffix":"","start":1,"end":5,"step":1,"padWidth":4}}' \
+  -o batch.pdf
+```
+- [ ] Returns valid PDF
+- [ ] PDF has exactly 5 pages
+- [ ] Page 1 contains serial SN0001, page 2 SN0002, ..., page 5 SN0005
+- [ ] Each page is the correct label size
+- [ ] All pages have consistent GTIN, dates, expiration
+
+**Batch PNG ZIP export:**
+```bash
+curl -X POST http://localhost:3001/api/labels/export-batch-png \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{"templateId":"[ID]","data":{...serial data...},"serialPattern":{"prefix":"SN","suffix":"","start":1,"end":5,"step":1,"padWidth":4}}' \
+  -o batch.zip
+```
+- [ ] Returns valid ZIP file (verify with `file batch.zip` → "Zip archive data")
+- [ ] Response has `Content-Type: application/zip`
+- [ ] Extract ZIP → 5 PNG files
+- [ ] Filenames include the serial number: `{gtin}-SN0001.png`, etc.
+- [ ] Each PNG is a valid image with correct serial
+
+**Export limits and edge cases:**
+- [ ] Batch with 501 serials → 400 with "Batch export limited to 500 labels"
+- [ ] Batch with exactly 500 serials → succeeds (takes time but completes)
+- [ ] Export without auth → 401
+- [ ] Export with invalid templateId → 404
+- [ ] Export with incomplete data (missing GTIN) → 400 with validation error
+- [ ] LOT mode batch PDF: all pages identical (no serial variation), no expiration on any page
+- [ ] Response timeout: batch of 100 labels → should complete within reasonable time (< 60 seconds)
+
+### T2.6 — Barcode Preview
+```bash
+# LOT mode preview
+curl -X POST http://localhost:3001/api/barcode/preview \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{"gtin":"00850008393006","identifierMode":"lot","lotNumber":"MG96CI-260116","manufacturingDate":"2026-01-16"}' \
+  -o lot_preview.png
+```
+- [ ] Returns valid PNG image
+- [ ] Scan lot_preview.png → decoded data contains (01)(10)(11) — NO (17)
+
+```bash
+# SERIAL mode preview
+curl -X POST http://localhost:3001/api/barcode/preview \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{"gtin":"00850008393006","identifierMode":"serial","serialNumber":"ABC0001","manufacturingDate":"2026-02-18","expirationDate":"2033-02-18"}' \
+  -o serial_preview.png
+```
+- [ ] Returns valid PNG image
+- [ ] Scan serial_preview.png → decoded data contains (01)(17)(11)(21)
+
+---
+
+## TEST SUITE 3: ZPL GENERATION ACCURACY
+
+### T3.1 — LOT Mode ZPL
+```bash
+curl -X POST http://localhost:3001/api/zpl/generate \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{"templateId":"[ID]","data":{"gtin":"00850008393006","identifierMode":"lot","lotNumber":"MG96CI-260116","manufacturingDate":"2026-01-16"}}'
+```
+
+Inspect the returned ZPL string:
+- [ ] Starts with ^XA, ends with ^XZ
+- [ ] Contains ^BX (DataMatrix command)
+- [ ] The ^FD after ^BX contains "(01)" and "(10)" and "(11)" in ENCODING order
+- [ ] The ^FD after ^BX does NOT contain "(17)" — CRITICAL CHECK
+- [ ] HRI text section has EXACTLY 3 ^FD text lines
+- [ ] **HRI order check:** the 3 HRI ^FD lines appear in this order:
+  1. ^FD(01) 00850008393006^FS
+  2. ^FD(10) MG96CI-260116^FS  ← identifier is line 2, NOT a date
+  3. ^FD(11) 260116^FS
+- [ ] HRI text section does NOT contain any line with "(17)"
+- [ ] Copy ZPL to labelary.com/viewer.html → renders correctly with HRI in correct order
+- [ ] Scan the Labelary rendering → data correct, no expiration
+
+### T3.2 — SERIAL Mode ZPL
+```bash
+curl -X POST http://localhost:3001/api/zpl/generate \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{"templateId":"[ID]","data":{"gtin":"00850008393006","identifierMode":"serial","serialNumber":"BWIII2026-1234","manufacturingDate":"2026-02-18","expirationDate":"2033-02-18"}}'
+```
+
+Inspect:
+- [ ] ^FD after ^BX contains "(01)", "(17)", "(11)", "(21)" in ENCODING order
+- [ ] HRI section has EXACTLY 4 ^FD text lines
+- [ ] **HRI order check:** the 4 HRI ^FD lines appear in this order:
+  1. ^FD(01) 00850008393006^FS
+  2. ^FD(21) BWIII2026-1234^FS  ← identifier is line 2, NOT a date
+  3. ^FD(11) 260218^FS
+  4. ^FD(17) 330218^FS
+- [ ] Paste in Labelary → renders correctly with 4 HRI lines in correct order
+- [ ] Scan Labelary → data correct, expiration present
+- [ ] Serial "BWIII2026-1234" renders fully (no truncation, hyphens preserved)
+
+### T3.3 — ZPL Coordinate Accuracy & Unit Conversion
+- [ ] Element at (2mm, 2mm) at 203 DPI → ^FO16,16 (2 × 203/25.4 = 15.98 ≈ 16)
+- [ ] Label 50.8mm wide → ^PW406 (50.8 × 203/25.4 = 406)
+- [ ] Label 25.4mm tall → ^LL203 (25.4 × 203/25.4 = 203)
+- [ ] Verify math: mmToDots(mm, 203) = Math.round(mm * 203 / 25.4)
+- [ ] **Square label** 25.4mm × 25.4mm → ^PW203 and ^LL203 (equal width/height)
+- [ ] **Large label** 101.6mm × 76.2mm → ^PW812 and ^LL609
+- [ ] **Unit conversion round-trip:** 2 inches → 50.8mm → 406 dots at 203 DPI → verify all three conversions are correct
+- [ ] **Inches input stored as mm:** If template was created with 2" × 1", verify templates.json has widthMm=50.8, heightMm=25.4 (NOT 2 and 1)
+- [ ] **Margin field:** template with marginMm=1 → this value is stored but does NOT affect ZPL output (margin is a design-time visual guide, not a print command — the ZPL uses element positions as-is)
+
+### T3.4 — Batch ZPL
+```bash
+# Serial batch
+curl -X POST http://localhost:3001/api/zpl/batch-generate \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{"templateId":"[ID]","data":{...serial mode data...},"serialPattern":{"prefix":"ABC","suffix":"","start":1,"end":5,"step":1,"padWidth":4},"copiesPerLabel":1}'
+```
+- [ ] Returns ZPL with 5 separate ^XA...^XZ blocks
+- [ ] Block 1: serial = ABC0001
+- [ ] Block 2: serial = ABC0002
+- [ ] Block 3: serial = ABC0003
+- [ ] Block 4: serial = ABC0004
+- [ ] Block 5: serial = ABC0005
+- [ ] All other data (GTIN, dates, expiration) is identical across all blocks
+- [ ] Each block has the correct serial in BOTH the DataMatrix ^FD AND the HRI text ^FD
+
+### T3.5 — Lot Batch ZPL
+- [ ] Lot batch with copies=3 → either 3 identical ^XA...^XZ blocks OR uses ^PQ3 command
+- [ ] No expiration in any block
+
+### T3.6 — ZPL GS1 String Format
+- [ ] GS separator (ASCII 29) is encoded as `~d029` in ZPL
+- [ ] FNC1 handling: verify ^BX parameters enable GS1 mode (check 6th parameter or ~1 flag)
+- [ ] Test on Labelary that the barcode scans correctly as a GS1 DataMatrix (not a plain DataMatrix)
+
+---
+
+## TEST SUITE 4: DATA INTEGRITY & JSON STORAGE
+
+### T4.1 — File Locking
+- [ ] Open two browser tabs, trigger simultaneous writes (e.g., create two products at once)
+  → Both should succeed, neither should corrupt the JSON file
+- [ ] Check JSON files are valid JSON after concurrent operations
+- [ ] Rapid successive API calls (10 POST requests in 1 second) → data file is not corrupted
+
+### T4.2 — Data Persistence
+- [ ] Create data (users, products, templates, print jobs)
+- [ ] Stop the server with Ctrl+C
+- [ ] Restart the server
+- [ ] All data still present and correct
+
+### T4.3 — Audit Log Integrity
+- [ ] audit-log.json contains entries for: login, user creation, template creation, product creation, print job
+- [ ] Each entry has timestamp, userId, actionType
+- [ ] Attempt to call any API that would update or delete audit log entries → should fail or not exist
+- [ ] Manually inspect: no duplicate IDs in audit-log.json
+- [ ] IDs are sequential (auto-increment)
+
+### T4.4 — Template Versioning Integrity
+- [ ] After 3 saves of the same template: templates.json has 3 records with same templateGroupId
+- [ ] Only the latest has isCurrent=true
+- [ ] Older versions have isCurrent=false
+- [ ] All versions are intact (elements arrays complete)
+
+### T4.5 — Reference Integrity
+- [ ] Delete a product that's referenced by print jobs → should be prevented or handled
+- [ ] Delete a template referenced by print jobs → should be prevented
+- [ ] Delete a printer referenced by print jobs → should be prevented
+- [ ] Delete a user that has created products/templates → what happens? Document behavior.
+
+### T4.6 — JSON File Edge Cases
+- [ ] Delete data/products.json while server is running → next API call should handle gracefully (recreate file or show error, not crash)
+- [ ] Put invalid JSON in products.json → server should handle (show error, not crash)
+- [ ] Put an empty string in products.json → should handle
+- [ ] Put `null` in products.json → should handle
+
+---
+
+## TEST SUITE 5: SECURITY
+
+### T5.1 — Authentication Bypass Attempts
+- [ ] Access /api/products without auth cookie → 401
+- [ ] Access /api/auth/users (admin) with operator cookie → 403
+- [ ] Craft a JWT with a fake secret → 401
+- [ ] Send expired JWT → 401
+- [ ] Modify JWT payload without re-signing → 401
+
+### T5.2 — Input Validation
+- [ ] POST /api/products with GTIN > 14 chars → 400
+- [ ] POST /api/products with identifierMode "hacker" → 400
+- [ ] POST /api/auth/users with role "superadmin" → 400
+- [ ] POST /api/templates with widthMm = -5 → 400
+- [ ] POST /api/templates with elements containing unknown type → 400 or filtered
+- [ ] Send extremely large request body (1MB JSON) → rejected or handled
+
+### T5.3 — Path Traversal
+- [ ] If any endpoint accepts filenames, test: `../../etc/passwd` → not served
+- [ ] JSON store: test if crafted IDs could access files outside /data → verify paths are safe
+
+---
+
+## TEST SUITE 6: PRINTER, PRINT QUEUE & PRINT PIPELINE
+
+### T6.1 — Printer CRUD via API
+- [ ] POST /api/printers with connectionType="zebra_browser_print" → saved
+- [ ] POST /api/printers with connectionType="network_tcp", ipAddress="192.168.1.100", port=9100 → saved
+- [ ] POST /api/printers with connectionType="invalid" → 400
+- [ ] POST /api/printers with network type but no IP → 400
+- [ ] POST /api/printers with port=99999 → 400 (out of range)
+- [ ] POST /api/printers/:id/set-default → only one printer has isDefault=true in JSON file
+
+### T6.2 — LAN Print Queue Behavior
+- [ ] POST /api/print-jobs from server PC (Zebra Browser Print detected) → status starts as 'pending', ZPL returned in response for immediate client-side printing
+- [ ] POST /api/print-jobs from LAN PC (no Zebra Browser Print) → status set to 'queued', ZPL stored in print job record
+- [ ] GET /api/print-jobs?status=queued → returns only queued jobs
+- [ ] Queued job record in data/print-jobs.json includes the full ZPL string
+- [ ] PATCH /api/print-jobs/:id/status from 'queued' to 'printing' → allowed
+- [ ] PATCH /api/print-jobs/:id/status from 'queued' to 'completed' → allowed
+- [ ] PATCH /api/print-jobs/:id/status from 'completed' to 'queued' → rejected (invalid transition)
+- [ ] Queue 10 jobs → GET returns all 10 → process all → all status updated to 'completed'
+
+### T6.3 — Print Job Execution (if printer available)
+- [ ] LOT mode print → physical label has 3 HRI lines, no expiration
+- [ ] SERIAL mode print → physical label has 4 HRI lines, with expiration
+- [ ] Batch 5 serials → 5 distinct labels, each with correct unique serial
+- [ ] Scan all printed labels → all decode correctly
+
+### T6.4 — Print Job Status Flow
+- [ ] Create job → status = 'pending' (local) or 'queued' (LAN)
+- [ ] Client reports printing started → status = 'printing'
+- [ ] Client reports completion → status = 'completed', completedAt set
+- [ ] Client reports failure → status = 'failed', errorMessage set
+- [ ] No invalid status transitions (e.g., 'completed' → 'pending')
+
+---
+
+## TEST SUITE 7: LAN DEPLOYMENT & NETWORK ACCESS
+
+### T7.1 — Production Build
+- [ ] `npm run build` completes without errors
+- [ ] `npm run start` serves the app on port 3001
+- [ ] Console shows both localhost and network IP URLs
+- [ ] Client pages load from Express static file serving
+- [ ] Client-side routing works (refresh on /templates doesn't 404)
+
+### T7.2 — LAN Access
+- [ ] Server binds to 0.0.0.0 (not just localhost) — verify with `netstat` or similar
+- [ ] From a different device on the same WiFi, open http://[server-IP]:3001 → app loads
+- [ ] Login from LAN device works
+- [ ] Creating data from LAN device persists in JSON files on the server PC
+- [ ] If Windows Firewall blocks port 3001 → document this as a setup requirement, not a bug
+
+### T7.3 — Environment Configuration
+- [ ] .env.example exists with all required variables documented
+- [ ] Changing JWT_SECRET in .env → old sessions invalidated (as expected)
+- [ ] Changing PORT → server starts on new port → console shows correct URLs
+
+---
+
+## OUTPUT FORMAT
+
+```markdown
+# QA Report — Backend, Data Integrity & Print Pipeline
+## Date: [date]
+## Tester: Agent 5
+## Build: [commit hash or version]
+
+## Summary
+- Total tests executed: X
+- Passed: X
+- Failed: X (Y critical, Z high, W medium, V low)
+- Blocked: X
+
+## CRITICAL: GS1 Encoding / Regulatory Compliance Bugs
+[Any bug where LOT mode contains expiration data or SERIAL mode is missing it]
+[Any bug where scanned barcodes don't decode correctly]
+
+## CRITICAL: Data Integrity Bugs
+[JSON corruption, data loss, audit log modification possible]
+
+## High Severity Bugs
+[Security issues, API crashes, ZPL rendering errors]
+
+## Medium Severity Bugs
+[Validation gaps, edge cases, non-critical functional issues]
+
+## Low Severity / Polish
+[Minor issues]
+
+## Unfinished / Missing Features
+[Features from prompts that aren't implemented]
+
+## Performance Notes
+[Any slowness, memory issues, or concerns about scaling to 6 users]
+
+## Recommendations
+[Prioritized fix list]
+```
+
+Bug format:
+```
+BUG ID: T[suite].[test]-[N]
+SEVERITY: Critical / High / Medium / Low
+COMPONENT: [file or service name]
+ENDPOINT: [API endpoint if applicable]
+STEPS TO REPRODUCE:
+1. [exact curl command or steps]
+EXPECTED: [what should happen]
+ACTUAL: [what actually happens]
+EVIDENCE: [JSON file contents, response body, ZPL output snippet]
+IMPACT: [regulatory, data integrity, security, UX]
+SUGGESTED FIX: [if obvious]
+```
