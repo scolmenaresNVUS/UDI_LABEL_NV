@@ -23,6 +23,8 @@ RUN cd client && npm prune --production && \
     cd ../server && npm prune --production && \
     cd .. && npm prune --production
 
-EXPOSE 3001
+EXPOSE 8080
+ENV PORT=8080
+ENV NODE_ENV=production
 
 CMD ["npm", "run", "start"]
