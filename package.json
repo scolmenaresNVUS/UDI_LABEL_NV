@@ -6,8 +6,7 @@
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
     "dev:client": "cd client && npm run dev",
     "dev:server": "cd server && npm run dev",
-    "postinstall": "cd client && npm install --include=dev && cd ../server && npm install --include=dev",
-    "build": "cd client && npm run build && cd ../server && npm run build",
+    "build": "cd client && npm install --production=false && npm run build && cd ../server && npm install --production=false && npm run build",
     "start": "cd server && npm start",
     "install:all": "npm install && cd client && npm install && cd ../server && npm install"
   },
