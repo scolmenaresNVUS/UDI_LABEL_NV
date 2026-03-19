@@ -1,4 +1,4 @@
-FROM node:22-alpine
+FROM node:22-alpine AS build
 
 WORKDIR /app
 
@@ -16,15 +16,25 @@ RUN npm ci && \
 COPY . .
 
 # Build client and server
-RUN npm run build
+RUN cd client && npm run build && cd ../server && npm run build
 
-# Remove devDependencies after build
-RUN cd client && npm prune --production && \
-    cd ../server && npm prune --production && \
-    cd .. && npm prune --production
+# --- Production stage ---
+FROM node:22-alpine
 
-EXPOSE 8080
+WORKDIR /app
+
+COPY package*.json ./
+COPY server/package*.json ./server/
+
+# Install only production dependencies for server
+RUN cd server && npm ci --omit=dev
+
+# Copy built assets from build stage
+COPY --from=build /app/client/dist ./client/dist
+COPY --from=build /app/server/dist ./server/dist
+
 ENV PORT=8080
 ENV NODE_ENV=production
+EXPOSE 8080
 
-CMD ["npm", "run", "start"]
+CMD ["node", "server/dist/app.js"]
