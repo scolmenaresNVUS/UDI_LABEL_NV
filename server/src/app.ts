@@ -18,7 +18,7 @@ import auditLogRoutes from './routes/auditLog.routes';
 import zebraRoutes from './routes/zebra.routes';
 
 const app = express();
-const PORT = parseInt(process.env.PORT || '3001', 10);
+const PORT = parseInt(process.env.PORT || '8080', 10);
 
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors({
