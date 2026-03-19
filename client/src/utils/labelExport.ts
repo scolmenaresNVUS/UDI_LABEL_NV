@@ -26,9 +26,6 @@ export interface LabelExportOptions {
   filename?: string;
 }
 
-// The templates are designed for ZPL rendering at this DPI
-const ZPL_BASE_DPI = 203;
-
 /**
  * Render a full label onto a high-resolution canvas.
  *
@@ -220,7 +217,7 @@ async function renderLabelCanvas(opts: LabelExportOptions): Promise<HTMLCanvasEl
 }
 
 /** Fallback element positions when template has no elements */
-function defaultElements(wMm: number, hMm: number) {
+function defaultElements(wMm: number, hMm: number): LabelExportOptions['elements'] {
   return [
     { type: 'datamatrix', x_mm: wMm * 0.04, y_mm: hMm * 0.06, moduleSize: 3 },
     { type: 'hri_text', x_mm: wMm * 0.04, y_mm: hMm * 0.55, fontSize: 6, lineSpacing: 1.0 },
@@ -321,7 +318,7 @@ function buildMinimalPdf(
       enc.encode(obj2),
       enc.encode(obj3),
       enc.encode(obj4a), enc.encode(contentStr), enc.encode(obj4b),
-      enc.encode(obj5a), jpeg, enc.encode(obj5b),
+      enc.encode(obj5a), jpeg as unknown as BlobPart, enc.encode(obj5b),
       enc.encode(xref),
     ],
     { type: 'application/pdf' },
