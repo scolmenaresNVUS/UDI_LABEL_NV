@@ -27,6 +27,8 @@ function formatGS1Date(isoDate: string): string {
 
 export interface ZplInput {
   template: LabelTemplate;
+  includeDataMatrix?: boolean;
+  freeTextMode?: boolean;
   data: {
     gtin: string;
     identifierMode: 'lot' | 'serial';
@@ -97,6 +99,26 @@ export function generateZpl(input: ZplInput): string {
     '^LH0,0',
   ];
 
+  // Free-text mode (only the dedicated "LOT Label" product): render the user's raw text, nothing else.
+  if (input.freeTextMode && data.identifierMode === 'lot') {
+    const raw = (data.lotNumber || '').replace(/\^/g, ' ').replace(/~/g, ' ');
+    const textLines = raw.split(/\r?\n/);
+    const fontSize = 12; // pt
+    const fh = fontSizeToDots(fontSize, dpi);
+    const fw = Math.round(fh * 0.6);
+    const spacingDots = Math.round(fh * 1.3);
+    const startX = mmToDots(2, dpi);
+    const startY = mmToDots(2, dpi);
+    textLines.forEach((text, i) => {
+      const ly = startY + i * spacingDots;
+      lines.push(`^FO${startX},${ly}^A0N,${fh},${fw}^FD${text}^FS`);
+    });
+    lines.push('^XZ');
+    return lines.join('\n');
+  }
+
+  const skipDataMatrix = input.includeDataMatrix === false;
+
   for (const el of template.elements) {
     const x = mmToDots(el.x_mm, dpi);
     const y = mmToDots(el.y_mm, dpi);
@@ -104,6 +126,7 @@ export function generateZpl(input: ZplInput): string {
 
     switch (el.type) {
       case 'datamatrix': {
+        if (skipDataMatrix) break;
         const modSize = (el as any).moduleSize || 4;
         const gs1Str = buildZplGs1String(data);
         // ^BX for DataMatrix, ~1 for GS1 mode

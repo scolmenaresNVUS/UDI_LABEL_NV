@@ -1,10 +1,43 @@
 import { useState, useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import api from '../../services/api';
 import { checkZebraBrowserPrint, sendToZebraPrinter } from '../../services/zebraBrowserPrint';
 import { buildGS1ElementString, buildHriText } from '../../utils/gs1Encoder';
 import { exportLabelPng, exportLabelPdf } from '../../utils/labelExport';
 import DataMatrixPreview from '../LabelPreview/DataMatrixPreview';
 import HriTextPreview from '../LabelPreview/HriTextPreview';
+
+const LAST_CONFIG_KEY = 'udi-print-last-config';
+
+interface SavedConfig {
+  productId: string;
+  templateId: string;
+  printerId: string;
+  copiesPerLabel: number;
+  totalLabels: number;
+  serialCount: number;
+  serialStart: number;
+  expirationDate: string;
+  lotNumber: string;
+  manufacturingDate: string;
+  fontFamily: string;
+  includeDataMatrix: boolean;
+}
+
+function loadLastConfig(): SavedConfig | null {
+  try {
+    const raw = localStorage.getItem(LAST_CONFIG_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveLastConfig(config: SavedConfig) {
+  try {
+    localStorage.setItem(LAST_CONFIG_KEY, JSON.stringify(config));
+  } catch { /* ignore quota errors */ }
+}
 
 interface Product {
   id: string;
@@ -52,6 +85,7 @@ interface Printer {
 }
 
 export default function BatchPrintPage() {
+  const navigate = useNavigate();
   const [products, setProducts] = useState<Product[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [printers, setPrinters] = useState<Printer[]>([]);
@@ -71,6 +105,10 @@ export default function BatchPrintPage() {
   const [serialStart, setSerialStart] = useState(1);
   const [serialCount, setSerialCount] = useState(1);
 
+  // Font & DataMatrix options
+  const [fontFamily, setFontFamily] = useState('monospace');
+  const [includeDataMatrix, setIncludeDataMatrix] = useState(true);
+
   const [printing, setPrinting] = useState(false);
   const [progress, setProgress] = useState({ current: 0, total: 0, status: '' });
   const [error, setError] = useState('');
@@ -78,19 +116,44 @@ export default function BatchPrintPage() {
   const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
-    api.get('/products').then(r => setProducts(r.data)).catch(() => {});
+    const saved = loadLastConfig();
+    // Restore scalar values first so they're available when product resolves
+    if (saved) {
+      setCopiesPerLabel(saved.copiesPerLabel || 1);
+      setTotalLabels(saved.totalLabels || 1);
+      setSerialCount(saved.serialCount || 1);
+      if (saved.serialStart) setSerialStart(saved.serialStart);
+      if (saved.expirationDate) setExpirationDate(saved.expirationDate);
+      if (saved.lotNumber) setLotNumber(saved.lotNumber);
+      if (saved.manufacturingDate) setManufacturingDate(saved.manufacturingDate);
+      if (saved.fontFamily) setFontFamily(saved.fontFamily);
+      if (saved.includeDataMatrix !== undefined) setIncludeDataMatrix(saved.includeDataMatrix);
+    }
+    api.get('/products').then(r => {
+      setProducts(r.data);
+      if (saved) {
+        const p = (r.data as Product[]).find(pp => pp.id === saved.productId);
+        if (p) setSelectedProduct(p);
+      }
+    }).catch(() => {});
     api.get('/templates').then(r => {
       const current = (r.data as Template[]).filter(t => t.isCurrent);
       setTemplates(current);
-      if (current.length > 0) {
+      if (saved && current.find(t => t.id === saved.templateId)) {
+        setTemplateId(saved.templateId);
+      } else if (current.length > 0) {
         const square1x1 = current.find(t => t.widthMm === 25.4 && t.heightMm === 25.4);
         setTemplateId(square1x1 ? square1x1.id : current[0].id);
       }
     }).catch(() => {});
     api.get('/printers').then(r => {
       setPrinters(r.data);
-      const def = (r.data as Printer[]).find(p => p.isDefault);
-      if (def) setPrinterId(def.id);
+      if (saved && (r.data as Printer[]).find(p => p.id === saved.printerId)) {
+        setPrinterId(saved.printerId);
+      } else {
+        const def = (r.data as Printer[]).find(p => p.isDefault);
+        if (def) setPrinterId(def.id);
+      }
     }).catch(() => {});
     setZbpChecking(true);
     checkZebraBrowserPrint().then(r => {
@@ -99,11 +162,13 @@ export default function BatchPrintPage() {
     });
   }, []);
 
+  const isFreeTextProduct = (p: Product | null | undefined) => !!p && p.partNumber === 'LOT LABEL';
+
   const handleProductChange = (productId: string) => {
     const product = products.find(p => p.id === productId) || null;
     setSelectedProduct(product);
     if (product) {
-      if (product.identifierMode === 'lot' && product.lotPrefix) {
+      if (product.identifierMode === 'lot' && !isFreeTextProduct(product) && product.lotPrefix) {
         const d = new Date();
         const yy = String(d.getFullYear()).slice(2);
         const mm = String(d.getMonth() + 1).padStart(2, '0');
@@ -138,6 +203,13 @@ export default function BatchPrintPage() {
   // Build preview GS1 string and HRI for the first label
   const previewData = useMemo(() => {
     if (!selectedProduct) return { gs1String: '', hriLines: [] as string[] };
+    // Skip encoding until required fields are available
+    if (selectedProduct.identifierMode === 'serial' && !expirationDate) {
+      return { gs1String: '', hriLines: [] as string[] };
+    }
+    if (selectedProduct.identifierMode === 'lot' && !lotNumber) {
+      return { gs1String: '', hriLines: [] as string[] };
+    }
 
     try {
       const mfgDate = new Date(manufacturingDate + 'T00:00:00');
@@ -167,7 +239,11 @@ export default function BatchPrintPage() {
   const selectedTemplate = templates.find(t => t.id === templateId);
 
   const handleExport = async (format: 'png' | 'pdf') => {
-    if (!selectedProduct || !previewData.gs1String) {
+    if (!selectedProduct) {
+      setError('Select a product before exporting.');
+      return;
+    }
+    if (selectedProduct.identifierMode === 'serial' && includeDataMatrix && !previewData.gs1String) {
       setError('Select a product with valid data before exporting.');
       return;
     }
@@ -175,28 +251,45 @@ export default function BatchPrintPage() {
     setExporting(true);
     try {
       const template = templates.find(t => t.id === templateId);
+      const tw = template?.widthMm || 25.4;
+      const th = template?.heightMm || 25.4;
       const identifier = selectedProduct.identifierMode === 'lot'
-        ? lotNumber
+        ? (lotNumber.split(/\r?\n/)[0] || 'label')
         : `${selectedProduct.serialPrefix}${new Date().getFullYear()}-${serialStart}`;
       const filename = `${selectedProduct.name}-${identifier}`.replace(/[^a-zA-Z0-9_-]/g, '_');
 
+      // LOT Label product: export free-text-only label (no DataMatrix, no GS1 HRI)
+      const isLot = isFreeTextProduct(selectedProduct);
+      const textLines = isLot ? (lotNumber || '').split(/\r?\n/) : [];
+
       const opts = {
-        gs1String: previewData.gs1String,
-        hriLines: previewData.hriLines,
-        labelWidthMm: template?.widthMm || 25.4,
-        labelHeightMm: template?.heightMm || 25.4,
-        elements: (template?.elements || []).map(e => ({
-          type: e.type,
-          x_mm: e.x_mm,
-          y_mm: e.y_mm,
-          moduleSize: e.moduleSize,
-          fontSize: e.fontSize,
-          lineSpacing: e.lineSpacing,
-          text: e.text,
-          bold: e.bold,
-        })),
+        gs1String: isLot ? '' : previewData.gs1String,
+        hriLines: isLot ? [] : previewData.hriLines,
+        labelWidthMm: tw,
+        labelHeightMm: th,
+        elements: isLot
+          ? textLines.map((t, i) => ({
+              type: 'static_text' as const,
+              x_mm: 2,
+              y_mm: 2 + i * (th - 4) / Math.max(textLines.length, 1),
+              fontSize: Math.max(8, Math.floor((th - 4) / Math.max(textLines.length, 1) * 2.2)),
+              text: t,
+              bold: false,
+            }))
+          : (template?.elements || []).map(e => ({
+              type: e.type,
+              x_mm: e.x_mm,
+              y_mm: e.y_mm,
+              moduleSize: e.moduleSize,
+              fontSize: e.fontSize,
+              lineSpacing: e.lineSpacing,
+              text: e.text,
+              bold: e.bold,
+            })),
         dpi: exportDpi,
         filename,
+        fontFamily,
+        includeDataMatrix: isLot ? false : includeDataMatrix,
       };
 
       if (format === 'png') {
@@ -232,6 +325,22 @@ export default function BatchPrintPage() {
     setPrinting(true);
     setProgress({ current: 0, total: 0, status: 'Creating print job...' });
 
+    // Save configuration immediately so it persists regardless of print outcome
+    saveLastConfig({
+      productId: selectedProduct.id,
+      templateId,
+      printerId,
+      copiesPerLabel,
+      totalLabels,
+      serialCount,
+      serialStart,
+      expirationDate,
+      lotNumber,
+      manufacturingDate,
+      fontFamily,
+      includeDataMatrix,
+    });
+
     try {
       const serialNumbers = selectedProduct.identifierMode === 'serial' ? generateSerials() : undefined;
       const total = selectedProduct.identifierMode === 'serial' ? serialCount : totalLabels;
@@ -249,6 +358,7 @@ export default function BatchPrintPage() {
         expirationDate: selectedProduct.identifierMode === 'serial' ? expirationDate : undefined,
         totalLabels: total,
         copiesPerLabel,
+        includeDataMatrix,
       });
 
       const job = jobRes.data;
@@ -297,6 +407,24 @@ export default function BatchPrintPage() {
       } else {
         // Network printer — already sent server-side
         setProgress({ current: total, total, status: 'Completed!' });
+      }
+
+      // Update saved serial start after successful print
+      if (selectedProduct.identifierMode === 'serial') {
+        saveLastConfig({
+          productId: selectedProduct.id,
+          templateId,
+          printerId,
+          copiesPerLabel,
+          totalLabels,
+          serialCount,
+          serialStart: serialStart + serialCount,
+          expirationDate,
+          lotNumber,
+          manufacturingDate,
+          fontFamily,
+          includeDataMatrix,
+        });
       }
 
       if (selectedProduct.identifierMode === 'serial') {
@@ -399,9 +527,21 @@ export default function BatchPrintPage() {
               {selectedProduct?.identifierMode === 'lot' && (
                 <>
                   <div>
-                    <label className="block text-gray-400 text-xs mb-1">Lot Number</label>
-                    <input value={lotNumber} onChange={e => setLotNumber(e.target.value)}
-                      className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white text-sm" />
+                    {isFreeTextProduct(selectedProduct) ? (
+                      <>
+                        <label className="block text-gray-400 text-xs mb-1">Label Text (free-form, multi-line)</label>
+                        <textarea value={lotNumber} onChange={e => setLotNumber(e.target.value)}
+                          rows={4}
+                          placeholder="Type the text to print on the label..."
+                          className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white text-sm font-mono" />
+                      </>
+                    ) : (
+                      <>
+                        <label className="block text-gray-400 text-xs mb-1">Lot Number</label>
+                        <input value={lotNumber} onChange={e => setLotNumber(e.target.value)}
+                          className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white text-sm" />
+                      </>
+                    )}
                   </div>
                   <div>
                     <label className="block text-gray-400 text-xs mb-1">Number of Labels</label>
@@ -448,6 +588,33 @@ export default function BatchPrintPage() {
               </div>
             </div>
           </div>
+
+          {/* Label Options */}
+          <div className="bg-gray-800 rounded-xl border border-gray-700 p-4">
+            <h2 className="text-white text-sm font-medium mb-3">Label Options</h2>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-gray-400 text-xs mb-1">Font Family</label>
+                <select value={fontFamily} onChange={e => setFontFamily(e.target.value)}
+                  className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white text-sm">
+                  <option value="monospace">Courier New (Monospace)</option>
+                  <option value="verdana">Verdana</option>
+                  <option value="arial">Arial</option>
+                </select>
+              </div>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={includeDataMatrix}
+                  onChange={e => setIncludeDataMatrix(e.target.checked)}
+                  className="w-4 h-4 rounded bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500" />
+                <span className="text-white text-sm">Include GS1 DataMatrix barcode</span>
+              </label>
+              {!includeDataMatrix && (
+                <p className="text-yellow-400 text-xs">
+                  Warning: Labels without a GS1 DataMatrix may not comply with FDA/EU MDR requirements.
+                </p>
+              )}
+            </div>
+          </div>
         </div>
 
         {/* Right: Preview & Actions */}
@@ -480,6 +647,25 @@ export default function BatchPrintPage() {
                   const pw = tw * scale;
                   const ph = th * scale;
 
+                  // LOT Label product: free-text-only label preview
+                  if (isFreeTextProduct(selectedProduct)) {
+                    const textLines = (lotNumber || '').split(/\r?\n/);
+                    const fontPx = Math.max(8, Math.floor(ph / Math.max(4, textLines.length + 1)));
+                    return (
+                      <div
+                        className="bg-white rounded shadow-lg relative overflow-hidden"
+                        style={{ width: pw, height: ph, padding: 2 * scale }}
+                      >
+                        <div style={{ fontFamily: 'Courier New, monospace', fontSize: fontPx, lineHeight: 1.3, color: '#000', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                          {lotNumber || <span className="text-gray-400">Type label text...</span>}
+                        </div>
+                        <div className="absolute bottom-0.5 right-1 text-gray-400" style={{ fontSize: Math.max(6, Math.floor(ph * 0.06)) }}>
+                          {tw} x {th} mm
+                        </div>
+                      </div>
+                    );
+                  }
+
                   const dmEl = elements.find(e => e.type === 'datamatrix');
                   const hriEl = elements.find(e => e.type === 'hri_text');
 
@@ -501,20 +687,20 @@ export default function BatchPrintPage() {
                       className="bg-white rounded shadow-lg relative overflow-hidden"
                       style={{ width: pw, height: ph }}
                     >
-                      {dmEl && (
+                      {includeDataMatrix && dmEl && (
                         <div className="absolute" style={{ left: dmEl.x_mm * scale, top: dmEl.y_mm * scale }}>
                           <DataMatrixPreview gs1String={previewData.gs1String} size={dmSize} />
                         </div>
                       )}
                       {hriEl && (
                         <div className="absolute" style={{ left: hriEl.x_mm * scale, top: hriEl.y_mm * scale }}>
-                          <HriTextPreview lines={displayLines} fontSize={hriFontSize} />
+                          <HriTextPreview lines={displayLines} fontSize={hriFontSize} fontFamily={fontFamily} />
                         </div>
                       )}
                       {!dmEl && !hriEl && (
                         <div className="w-full h-full flex flex-col items-center justify-center gap-1">
-                          <DataMatrixPreview gs1String={previewData.gs1String} size={dmSize} />
-                          <HriTextPreview lines={displayLines} fontSize={hriFontSize} />
+                          {includeDataMatrix && <DataMatrixPreview gs1String={previewData.gs1String} size={dmSize} />}
+                          <HriTextPreview lines={displayLines} fontSize={hriFontSize} fontFamily={fontFamily} />
                         </div>
                       )}
                       <div className="absolute bottom-0.5 right-1 text-gray-400" style={{ fontSize: Math.max(6, Math.floor(ph * 0.06)) }}>
@@ -553,8 +739,8 @@ export default function BatchPrintPage() {
                 </div>
                 {selectedProduct.identifierMode === 'lot' && (
                   <div className="flex justify-between">
-                    <span className="text-gray-400">Lot:</span>
-                    <span className="text-white font-mono">{lotNumber}</span>
+                    <span className="text-gray-400">{isFreeTextProduct(selectedProduct) ? 'Label Text:' : 'Lot:'}</span>
+                    <span className="text-white font-mono truncate max-w-[60%]">{(lotNumber || '').split(/\r?\n/)[0]}</span>
                   </div>
                 )}
                 <div className="flex justify-between">
@@ -570,7 +756,11 @@ export default function BatchPrintPage() {
 
                 {selectedProduct.identifierMode === 'lot' && (
                   <div className="bg-blue-900/20 border border-blue-700/50 rounded p-2 mt-2">
-                    <span className="text-blue-400 text-xs">LOT mode: No expiration date will be encoded</span>
+                    <span className="text-blue-400 text-xs">
+                      {isFreeTextProduct(selectedProduct)
+                        ? 'LOT Label: prints free-form label text only (no DataMatrix, no GS1)'
+                        : 'LOT mode: No expiration date will be encoded'}
+                    </span>
                   </div>
                 )}
                 {selectedProduct.identifierMode === 'serial' && (
@@ -614,14 +804,26 @@ export default function BatchPrintPage() {
             </div>
           )}
 
-          {/* Print Button */}
-          <button
-            onClick={handlePrint}
-            disabled={printing || !selectedProduct || !templateId}
-            className="w-full bg-green-600 hover:bg-green-500 disabled:bg-gray-700 disabled:text-gray-500 text-white py-3 rounded-xl text-sm font-medium transition-colors"
-          >
-            {printing ? 'Printing...' : printerId ? 'Print Labels' : 'Queue Labels'}
-          </button>
+          {/* Print Button + Queue Shortcut */}
+          <div className="flex gap-3">
+            <button
+              onClick={handlePrint}
+              disabled={printing || !selectedProduct || !templateId}
+              className="flex-1 bg-green-600 hover:bg-green-500 disabled:bg-gray-700 disabled:text-gray-500 text-white py-3 rounded-xl text-sm font-medium transition-colors"
+            >
+              {printing ? 'Printing...' : printerId ? 'Print Labels' : 'Queue Labels'}
+            </button>
+            <button
+              onClick={() => navigate('/print-queue')}
+              className="bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white px-4 py-3 rounded-xl text-sm font-medium transition-colors flex items-center gap-2"
+              title="Print Queue"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 010 3.75H5.625a1.875 1.875 0 010-3.75z" />
+              </svg>
+              Queue
+            </button>
+          </div>
 
           {/* Save / Export */}
           <div className="bg-gray-800 rounded-xl border border-gray-700 p-4">
@@ -641,14 +843,14 @@ export default function BatchPrintPage() {
             <div className="grid grid-cols-2 gap-3">
               <button
                 onClick={() => handleExport('png')}
-                disabled={exporting || !selectedProduct || !previewData.gs1String}
+                disabled={exporting || !selectedProduct || (!isFreeTextProduct(selectedProduct) && includeDataMatrix && !previewData.gs1String)}
                 className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-700 disabled:text-gray-500 text-white py-2 rounded-lg text-sm font-medium transition-colors"
               >
                 {exporting ? 'Exporting...' : 'Save PNG'}
               </button>
               <button
                 onClick={() => handleExport('pdf')}
-                disabled={exporting || !selectedProduct || !previewData.gs1String}
+                disabled={exporting || !selectedProduct || (!isFreeTextProduct(selectedProduct) && includeDataMatrix && !previewData.gs1String)}
                 className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-700 disabled:text-gray-500 text-white py-2 rounded-lg text-sm font-medium transition-colors"
               >
                 {exporting ? 'Exporting...' : 'Save PDF'}

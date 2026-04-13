@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
-import { printJobStore, serialCounterStore, templateStore, printerStore } from '../stores';
+import { printJobStore, serialCounterStore, templateStore, printerStore, productStore } from '../stores';
 import { authenticate } from '../middleware/auth.middleware';
 import { logAction } from '../services/audit.service';
 import { generateZpl, generateBatchZpl, generateLotBatchZpl, ZplInput } from '../services/zpl.service';
@@ -32,7 +32,7 @@ router.post('/', authenticate, async (req: Request, res: Response) => {
     const {
       templateId, printerId, productId, identifierMode,
       gtin, lotNumber, serialNumbers, manufacturingDate,
-      expirationDate, totalLabels, copiesPerLabel
+      expirationDate, totalLabels, copiesPerLabel, includeDataMatrix
     } = req.body;
 
     const template = await templateStore.findById(templateId);
@@ -51,7 +51,16 @@ router.post('/', authenticate, async (req: Request, res: Response) => {
       expirationDate: expirationDate || undefined,
     };
 
-    const input: ZplInput = { template, data };
+    // Free-text mode: only the dedicated "LOT Label" product prints raw text without GS1/DataMatrix.
+    const product = productId ? await productStore.findById(productId) : null;
+    const freeTextMode = !!product && (product as any).partNumber === 'LOT LABEL';
+
+    const input: ZplInput = {
+      template,
+      data,
+      includeDataMatrix: freeTextMode ? false : includeDataMatrix !== false,
+      freeTextMode,
+    };
     let zpl: string;
 
     if (identifierMode === 'serial' && serialNumbers?.length) {
