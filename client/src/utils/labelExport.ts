@@ -1,4 +1,5 @@
 import bwipjs from 'bwip-js';
+import { getFontCss } from '../components/LabelPreview/HriTextPreview';
 
 export interface LabelExportOptions {
   gs1String: string;
@@ -24,6 +25,8 @@ export interface LabelExportOptions {
   }>;
   dpi?: number;
   filename?: string;
+  fontFamily?: string;
+  includeDataMatrix?: boolean;
 }
 
 /**
@@ -57,9 +60,15 @@ async function renderLabelCanvas(opts: LabelExportOptions): Promise<HTMLCanvasEl
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, canvasW, canvasH);
 
-  const elements = opts.elements.length > 0
+  const includeDataMatrix = opts.includeDataMatrix !== false;
+  const fontCss = getFontCss(opts.fontFamily);
+
+  const allElements = opts.elements.length > 0
     ? opts.elements
     : defaultElements(opts.labelWidthMm, opts.labelHeightMm);
+  const elements = includeDataMatrix
+    ? allElements
+    : allElements.filter(e => e.type !== 'datamatrix');
 
   // --- Pre-scan: determine barcode constraints from layout ---
   const dmEl = elements.find(e => e.type === 'datamatrix');
@@ -127,7 +136,7 @@ async function renderLabelCanvas(opts: LabelExportOptions): Promise<HTMLCanvasEl
         const availableW = canvasW - x - Math.round(MARGIN_MM * pxPerMm);
 
         // Measure widest line and auto-shrink if needed
-        ctx.font = `${pxSize}px "Courier New", Courier, monospace`;
+        ctx.font = `${pxSize}px ${fontCss}`;
         let maxTextW = 0;
         for (const line of opts.hriLines) {
           const w = ctx.measureText(line).width;
@@ -156,8 +165,8 @@ async function renderLabelCanvas(opts: LabelExportOptions): Promise<HTMLCanvasEl
         ctx.textBaseline = 'top';
         opts.hriLines.forEach((line, i) => {
           ctx.font = i === 0
-            ? `bold ${pxSize}px "Courier New", Courier, monospace`
-            : `${pxSize}px "Courier New", Courier, monospace`;
+            ? `bold ${pxSize}px ${fontCss}`
+            : `${pxSize}px ${fontCss}`;
           ctx.fillText(line, x, y + i * lineGap);
         });
         break;
@@ -169,14 +178,14 @@ async function renderLabelCanvas(opts: LabelExportOptions): Promise<HTMLCanvasEl
         const availableW = canvasW - x - Math.round(MARGIN_MM * pxPerMm);
 
         ctx.font = el.bold
-          ? `bold ${pxSize}px "Courier New", Courier, monospace`
-          : `${pxSize}px "Courier New", Courier, monospace`;
+          ? `bold ${pxSize}px ${fontCss}`
+          : `${pxSize}px ${fontCss}`;
         const measured = ctx.measureText(el.text || '').width;
         if (measured > availableW && availableW > 0) {
           pxSize = Math.floor(pxSize * availableW / measured);
           ctx.font = el.bold
-            ? `bold ${pxSize}px "Courier New", Courier, monospace`
-            : `${pxSize}px "Courier New", Courier, monospace`;
+            ? `bold ${pxSize}px ${fontCss}`
+            : `${pxSize}px ${fontCss}`;
         }
 
         ctx.fillStyle = '#000000';
