@@ -695,5 +695,22 @@
     "createdBy": "59871b6f-06bd-4324-b543-68945e5efa2b",
     "createdAt": "2026-03-04T18:17:09.318Z",
     "updatedAt": "2026-03-04T18:17:09.318Z"
+  },
+  {
+    "id": "6e222e49-14c8-4ac7-8773-504377048b36",
+    "name": "LOT Label",
+    "partNumber": "LOT LABEL",
+    "gtin": "12345678901234",
+    "description": "LOT LABEL",
+    "identifierMode": "lot",
+    "lotPrefix": "TEST",
+    "serialPrefix": null,
+    "serialStart": null,
+    "shelfLifeYears": 0,
+    "shelfLifeMonths": 0,
+    "shelfLifeDays": 0,
+    "createdBy": "59871b6f-06bd-4324-b543-68945e5efa2b",
+    "createdAt": "2026-04-03T19:58:38.171Z",
+    "updatedAt": "2026-04-03T19:58:38.171Z"
   }
 ]
