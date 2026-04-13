@@ -514,5 +514,76 @@
     ],
     "createdBy": "59871b6f-06bd-4324-b543-68945e5efa2b",
     "createdAt": "2026-03-05T15:39:06.301Z"
+  },
+  {
+    "id": "6157aa80-97c8-4c2c-af44-7f821d3cc4cf",
+    "templateGroupId": "0bec8e0f-37c8-45bb-a76d-350fb5663030",
+    "version": 1,
+    "isCurrent": false,
+    "name": "LOT NUMBER",
+    "description": "",
+    "widthMm": 25.4,
+    "heightMm": 12.7,
+    "marginMm": 1,
+    "dpi": 203,
+    "elements": [],
+    "createdBy": "59871b6f-06bd-4324-b543-68945e5efa2b",
+    "createdAt": "2026-04-03T19:36:58.359Z"
+  },
+  {
+    "id": "903696dc-eff5-4873-b9c1-98db4cb94c99",
+    "templateGroupId": "0bec8e0f-37c8-45bb-a76d-350fb5663030",
+    "version": 2,
+    "isCurrent": false,
+    "name": "LOT NUMBER",
+    "description": "",
+    "widthMm": 25.4,
+    "heightMm": 12.7,
+    "marginMm": 1,
+    "dpi": 203,
+    "elements": [
+      {
+        "id": "1806983e-7ff2-470b-a86a-51f78aa9540e",
+        "x_mm": 5,
+        "y_mm": 5,
+        "rotation": 0,
+        "locked": false,
+        "type": "static_text",
+        "text": "Text",
+        "fontSize": 8,
+        "fontFamily": "0",
+        "bold": false
+      }
+    ],
+    "createdBy": "59871b6f-06bd-4324-b543-68945e5efa2b",
+    "createdAt": "2026-04-03T19:37:05.033Z"
+  },
+  {
+    "id": "8bc0c281-fd48-4097-8851-8c6c306043b4",
+    "templateGroupId": "0bec8e0f-37c8-45bb-a76d-350fb5663030",
+    "version": 3,
+    "isCurrent": true,
+    "name": "LOT NUMBER",
+    "description": "",
+    "widthMm": 25.4,
+    "heightMm": 12.7,
+    "marginMm": 1,
+    "dpi": 203,
+    "elements": [
+      {
+        "id": "1806983e-7ff2-470b-a86a-51f78aa9540e",
+        "x_mm": 5,
+        "y_mm": 5,
+        "rotation": 0,
+        "locked": false,
+        "type": "static_text",
+        "text": "Text",
+        "fontSize": 8,
+        "fontFamily": "0",
+        "bold": false
+      }
+    ],
+    "createdBy": "59871b6f-06bd-4324-b543-68945e5efa2b",
+    "createdAt": "2026-04-06T17:24:21.681Z"
   }
 ]
