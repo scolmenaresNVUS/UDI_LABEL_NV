@@ -33,6 +33,10 @@ RUN cd server && npm ci --omit=dev
 COPY --from=build /app/client/dist ./client/dist
 COPY --from=build /app/server/dist ./server/dist
 
+# Seed data files (products, templates, etc.) — JsonStore resolves
+# relative to process.cwd() which is /app when CMD runs.
+COPY --from=build /app/server/data ./data
+
 ENV PORT=8080
 ENV NODE_ENV=production
 EXPOSE 8080
